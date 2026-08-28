@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+openai
+requests
+beautifulsoup4
+feedparser
+pillow
+edge-tts
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+jinja2
+python-multipart
+pydantic
