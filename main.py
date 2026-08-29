@@ -3,10 +3,9 @@ from pathlib import Path
 from fastapi import FastAPI,Form,BackgroundTasks
 from fastapi.responses import HTMLResponse,RedirectResponse
 from dotenv import load_dotenv
-from .db import *
-from .worker import run_job,upload_job,publish_job,autopilot_once
+from db import *
+from worker import run_job,upload_job,publish_job,autopilot_once
 
-load_dotenv()
 init()
 app=FastAPI(title="YouTube AI Autonomous 24/7")
 
