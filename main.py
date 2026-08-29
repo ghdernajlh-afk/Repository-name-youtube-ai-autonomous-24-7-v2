@@ -19,6 +19,9 @@ init()
 
 app = FastAPI(title="YouTube AI Autonomous 24/7")
 
+# حفظ OAuth code_verifier مؤقتًا
+oauth_sessions = {}
+
 
 # =========================
 # YouTube OAuth
@@ -26,17 +29,40 @@ app = FastAPI(title="YouTube AI Autonomous 24/7")
 
 @app.get("/auth")
 def auth():
-    url, state = authorization_url()
+    url, state, code_verifier = authorization_url()
+
+    oauth_sessions[state] = code_verifier
+
     return RedirectResponse(url)
 
 
 @app.get("/oauth2callback")
 def oauth2callback(code: str, state: str = ""):
-    finish_authorization(code, state)
+
+    code_verifier = oauth_sessions.pop(state, None)
+
+    if not code_verifier:
+        return HTMLResponse(
+            """
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+            <h2>❌ انتهت جلسة OAuth</h2>
+            <p>افتح /auth وابدأ عملية الربط من جديد.</p>
+            </html>
+            """,
+            status_code=400
+        )
+
+    finish_authorization(
+        code,
+        state,
+        code_verifier
+    )
 
     return HTMLResponse("""
     <html lang="ar" dir="rtl">
     <meta charset="utf-8">
+
     <style>
         body {
             font-family: Arial;
@@ -44,6 +70,7 @@ def oauth2callback(code: str, state: str = ""):
             margin: 50px auto;
             text-align: center;
         }
+
         a {
             display: inline-block;
             margin-top: 20px;
@@ -56,9 +83,15 @@ def oauth2callback(code: str, state: str = ""):
     </style>
 
     <h2>✅ تم ربط حساب YouTube بنجاح</h2>
-    <p>يمكنك الآن العودة إلى لوحة التحكم وبدء رفع الفيديوهات.</p>
 
-    <a href="/">العودة إلى الوكيل</a>
+    <p>
+        تم حفظ صلاحية الوصول إلى قناة YouTube.
+    </p>
+
+    <a href="/">
+        العودة إلى الوكيل
+    </a>
+
     </html>
     """)
 
@@ -118,7 +151,7 @@ def setup():
     </p>
 
     <p>
-        ضع client_secret.json داخل credentials/.
+        ضع client_secret.json داخل Render Secret Files.
     </p>
 
     <p>
