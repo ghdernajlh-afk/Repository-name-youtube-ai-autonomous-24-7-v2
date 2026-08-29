@@ -1,10 +1,10 @@
 import os, json, traceback, threading
 from pathlib import Path
-from .db import *
-from .discovery import discover, source_text
-from .ai import choose, make_content
-from .media import make_video
-from .youtube import upload_private,publish
+from db import *
+from discovery import discover, source_text
+from ai import choose, make_content
+from media import make_video
+from youtube import upload_private,publish
 
 def run_job(job_id):
     try:
