@@ -12,13 +12,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
-SECRET = Path("client_secret.json")
+# Render Secret File
+SECRET = Path("/etc/secrets/client_secret.json")
+
+# OAuth token
 TOKEN = Path("credentials/token.json")
 
 
 def get_flow():
     if not SECRET.exists():
-        raise RuntimeError("ضع client_secret.json في Render Secret Files")
+        raise RuntimeError(
+            "ضع client_secret.json في Render Secret Files"
+        )
 
     redirect_uri = os.getenv(
         "OAUTH_REDIRECT_URI",
