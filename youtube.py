@@ -12,14 +12,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
-# Render Secret File
 SECRET = Path("/etc/secrets/client_secret.json")
-
-# OAuth token
 TOKEN = Path("credentials/token.json")
 
 
-def get_flow():
+def get_flow(code_verifier=None):
     if not SECRET.exists():
         raise RuntimeError(
             "ضع client_secret.json في Render Secret Files"
@@ -36,6 +33,9 @@ def get_flow():
         redirect_uri=redirect_uri,
     )
 
+    if code_verifier:
+        flow.oauth2session._client.code_verifier = code_verifier
+
     return flow
 
 
@@ -48,13 +48,18 @@ def authorization_url():
         prompt="consent",
     )
 
-    return url, state
+    code_verifier = flow.oauth2session._client.code_verifier
+
+    return url, state, code_verifier
 
 
-def finish_authorization(code, state=None):
-    flow = get_flow()
+def finish_authorization(code, state, code_verifier):
+    flow = get_flow(code_verifier=code_verifier)
 
-    flow.fetch_token(code=code)
+    flow.fetch_token(
+        code=code,
+        include_client_id=True,
+    )
 
     creds = flow.credentials
 
