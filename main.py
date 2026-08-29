@@ -1,10 +1,10 @@
 import os
 import threading
 import time
-from pathlib import Path
 
-from fastapi import FastAPI, Form, BackgroundTasks
+from fastapi import FastAPI, Form, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from dotenv import load_dotenv
 from db import *
@@ -19,8 +19,22 @@ init()
 
 app = FastAPI(title="YouTube AI Autonomous 24/7")
 
-# حفظ OAuth code_verifier مؤقتًا
-oauth_sessions = {}
+
+# =========================
+# Secure OAuth Session
+# =========================
+
+SESSION_SECRET = os.getenv(
+    "OAUTH_SESSION_SECRET",
+    "change-this-secret"
+)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    https_only=True,
+    same_site="lax",
+)
 
 
 # =========================
@@ -28,36 +42,102 @@ oauth_sessions = {}
 # =========================
 
 @app.get("/auth")
-def auth():
+def auth(request: Request):
+
     url, state, code_verifier = authorization_url()
 
-    oauth_sessions[state] = code_verifier
+    request.session["oauth_state"] = state
+    request.session["code_verifier"] = code_verifier
 
     return RedirectResponse(url)
 
 
 @app.get("/oauth2callback")
-def oauth2callback(code: str, state: str = ""):
+def oauth2callback(
+    request: Request,
+    code: str,
+    state: str = ""
+):
 
-    code_verifier = oauth_sessions.pop(state, None)
+    saved_state = request.session.get("oauth_state")
+    code_verifier = request.session.get("code_verifier")
 
-    if not code_verifier:
+    if not saved_state or not code_verifier:
         return HTMLResponse(
             """
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
+
             <h2>❌ انتهت جلسة OAuth</h2>
-            <p>افتح /auth وابدأ عملية الربط من جديد.</p>
+
+            <p>
+            افتح /auth وابدأ عملية الربط من جديد.
+            </p>
+
+            <a href="/auth">
+                🔗 إعادة ربط YouTube
+            </a>
+
             </html>
             """,
             status_code=400
         )
 
-    finish_authorization(
-        code,
-        state,
-        code_verifier
-    )
+    if state != saved_state:
+        return HTMLResponse(
+            """
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <h2>❌ OAuth State غير صحيح</h2>
+
+            <p>
+            أعد عملية الربط من البداية.
+            </p>
+
+            <a href="/auth">
+                🔗 إعادة ربط YouTube
+            </a>
+
+            </html>
+            """,
+            status_code=400
+        )
+
+    try:
+
+        finish_authorization(
+            code,
+            state,
+            code_verifier
+        )
+
+        request.session.pop("oauth_state", None)
+        request.session.pop("code_verifier", None)
+
+    except Exception as e:
+
+        print("OAuth ERROR:", repr(e))
+
+        return HTMLResponse(
+            """
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <h2>❌ فشل ربط YouTube</h2>
+
+            <p>
+            حدث خطأ أثناء حفظ صلاحية YouTube.
+            </p>
+
+            <a href="/auth">
+                🔗 المحاولة مرة أخرى
+            </a>
+
+            </html>
+            """,
+            status_code=500
+        )
 
     return HTMLResponse("""
     <html lang="ar" dir="rtl">
@@ -101,11 +181,14 @@ def oauth2callback(code: str, state: str = ""):
 # =========================
 
 def autopilot_loop():
+
     while True:
+
         try:
             autopilot_once()
-        except Exception:
-            pass
+
+        except Exception as e:
+            print("Autopilot ERROR:", repr(e))
 
         time.sleep(3600)
 
@@ -122,6 +205,7 @@ threading.Thread(
 
 @app.get("/setup", response_class=HTMLResponse)
 def setup():
+
     return """
     <html lang='ar' dir='rtl'>
     <meta charset='utf-8'>
@@ -147,7 +231,7 @@ def setup():
     <h1>إعداد الوكيل</h1>
 
     <p>
-        ضع OPENAI_API_KEY في متغيرات البيئة.
+        ضع OPENAI_API_KEY في Environment Variables.
     </p>
 
     <p>
@@ -213,7 +297,10 @@ def home():
         </tr>
         """
 
-    ap = os.getenv("AUTOPILOT", "false")
+    ap = os.getenv(
+        "AUTOPILOT",
+        "false"
+    )
 
     return f"""
     <!doctype html>
@@ -222,6 +309,7 @@ def home():
     <meta charset='utf-8'>
 
     <style>
+
         body {{
             font-family: Arial;
             max-width: 1200px;
@@ -242,9 +330,12 @@ def home():
             padding: 8px;
             border-bottom: 1px solid #ddd;
         }}
+
     </style>
 
-    <h1>🤖 YouTube AI Autonomous 24/7</h1>
+    <h1>
+        🤖 YouTube AI Autonomous 24/7
+    </h1>
 
     <p>
         Autopilot:
@@ -255,9 +346,13 @@ def home():
     </p>
 
     <p>
+
         <a href="/auth">
-            <button>🔗 ربط حساب YouTube</button>
+            <button>
+                🔗 ربط حساب YouTube
+            </button>
         </a>
+
     </p>
 
     <form method='post' action='/create'>
@@ -301,9 +396,11 @@ def home():
 
 
     <p>
+
         <a href='/setup'>
             الإعداد
         </a>
+
     </p>
 
     </html>
@@ -322,10 +419,14 @@ def create(
 
     jid = add_job(
         topic,
-        os.getenv("DEFAULT_LANGUAGE", "ar")
+        os.getenv(
+            "DEFAULT_LANGUAGE",
+            "ar"
+        )
     )
 
     if jid:
+
         background_tasks.add_task(
             run_job,
             jid
