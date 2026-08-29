@@ -1,22 +1,24 @@
 import os
 from pathlib import Path
+
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
-SECRET = Path("credentials/client_secret.json")
+SECRET = Path("client_secret.json")
 TOKEN = Path("credentials/token.json")
 
 
 def get_flow():
     if not SECRET.exists():
-        raise RuntimeError("ضع client_secret.json داخل credentials/")
+        raise RuntimeError("ضع client_secret.json في Render Secret Files")
 
     redirect_uri = os.getenv(
         "OAUTH_REDIRECT_URI",
@@ -28,6 +30,7 @@ def get_flow():
         scopes=SCOPES,
         redirect_uri=redirect_uri,
     )
+
     return flow
 
 
@@ -43,15 +46,22 @@ def authorization_url():
     return url, state
 
 
-def finish_authorization(code, state):
+def finish_authorization(code, state=None):
     flow = get_flow()
 
     flow.fetch_token(code=code)
 
     creds = flow.credentials
 
-    TOKEN.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN.write_text(creds.to_json(), encoding="utf-8")
+    TOKEN.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    TOKEN.write_text(
+        creds.to_json(),
+        encoding="utf-8"
+    )
 
     return creds
 
@@ -59,7 +69,7 @@ def finish_authorization(code, state):
 def service():
     if not TOKEN.exists():
         raise RuntimeError(
-            "YouTube غير مربوط بعد. افتح /auth لبدء ربط حساب YouTube."
+            "YouTube غير مربوط بعد. افتح /auth لبدء ربط الحساب."
         )
 
     creds = Credentials.from_authorized_user_file(
@@ -72,10 +82,19 @@ def service():
             "انتهت صلاحية YouTube OAuth. افتح /auth لإعادة الربط."
         )
 
-    return build("youtube", "v3", credentials=creds)
+    return build(
+        "youtube",
+        "v3",
+        credentials=creds
+    )
 
 
-def upload_private(path, title, description, thumbnail=None):
+def upload_private(
+    path,
+    title,
+    description,
+    thumbnail=None
+):
     yt = service()
 
     body = {
@@ -95,7 +114,7 @@ def upload_private(path, title, description, thumbnail=None):
         resumable=True
     )
 
-    req = yt.videos().insert(
+    request = yt.videos().insert(
         part="snippet,status",
         body=body,
         media_body=media
@@ -104,20 +123,20 @@ def upload_private(path, title, description, thumbnail=None):
     response = None
 
     while response is None:
-        status, response = req.next_chunk()
+        status, response = request.next_chunk()
 
-    vid = response["id"]
+    video_id = response["id"]
 
     if thumbnail and Path(thumbnail).exists():
         yt.thumbnails().set(
-            videoId=vid,
+            videoId=video_id,
             media_body=MediaFileUpload(
                 thumbnail,
                 mimetype="image/jpeg"
             )
         ).execute()
 
-    return vid
+    return video_id
 
 
 def publish(video_id):
@@ -137,9 +156,14 @@ def publish(video_id):
 def processing(video_id):
     yt = service()
 
-    r = yt.videos().list(
+    response = yt.videos().list(
         part="status,processingDetails",
         id=video_id
     ).execute()
 
-    return r.get("items", [{}])[0]
+    items = response.get("items", [])
+
+    if not items:
+        return {}
+
+    return items[0]
