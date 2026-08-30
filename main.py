@@ -35,6 +35,8 @@ if not SESSION_SECRET:
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
+    session_cookie="youtube_ai_session",
+    max_age=1800,
     https_only=True,
     same_site="lax",
 )
@@ -49,10 +51,18 @@ def auth(request: Request):
 
     url, state, code_verifier = authorization_url()
 
+    request.session.clear()
+
     request.session["oauth_state"] = state
     request.session["code_verifier"] = code_verifier
+    request.session["oauth_started"] = int(time.time())
 
-    return RedirectResponse(url)
+    print("OAuth started")
+
+    return RedirectResponse(
+        url,
+        status_code=302
+    )
 
 
 @app.get("/oauth2callback")
@@ -65,6 +75,13 @@ def oauth2callback(
     saved_state = request.session.get("oauth_state")
     code_verifier = request.session.get("code_verifier")
 
+    print(
+        "OAuth callback:",
+        "state_received=", bool(state),
+        "state_saved=", bool(saved_state),
+        "verifier_saved=", bool(code_verifier)
+    )
+
     if not saved_state or not code_verifier:
 
         return HTMLResponse(
@@ -72,11 +89,17 @@ def oauth2callback(
             <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
+            <meta name="viewport"
+                  content="width=device-width, initial-scale=1">
 
             <h2>❌ انتهت جلسة OAuth</h2>
 
             <p>
-            افتح /auth وابدأ عملية الربط من جديد.
+            لم يتم العثور على جلسة المصادقة.
+            </p>
+
+            <p>
+            اضغط الزر وابدأ ربط YouTube من جديد.
             </p>
 
             <a href="/auth">
@@ -89,6 +112,8 @@ def oauth2callback(
         )
 
     if state != saved_state:
+
+        print("OAuth ERROR: state mismatch")
 
         return HTMLResponse(
             """
@@ -138,19 +163,22 @@ def oauth2callback(
             code_verifier
         )
 
-        request.session.pop("oauth_state", None)
-        request.session.pop("code_verifier", None)
+        request.session.clear()
+
+        print("OAuth SUCCESS")
 
         return HTMLResponse(
             """
             <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
+            <meta name="viewport"
+                  content="width=device-width, initial-scale=1">
 
             <h2>✅ تم ربط YouTube بنجاح</h2>
 
             <p>
-            أصبح بإمكان الوكيل الوصول إلى قناة YouTube.
+            أصبح الوكيل قادرًا على الوصول إلى قناة YouTube.
             </p>
 
             <a href="/">
@@ -163,7 +191,10 @@ def oauth2callback(
 
     except Exception as e:
 
-        print("OAuth ERROR:", repr(e))
+        print(
+            "OAuth ERROR:",
+            repr(e)
+        )
 
         return HTMLResponse(
             f"""
@@ -236,6 +267,9 @@ def setup():
 
     <meta charset="utf-8">
 
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1">
+
     <style>
 
         body {
@@ -269,7 +303,11 @@ def setup():
     </p>
 
     <p>
-    يجب أن تكون إعدادات Google OAuth تحتوي على عنوان إعادة التوجيه الخاص بـ Render.
+    يجب إضافة OAUTH_REDIRECT_URI في Render.
+    </p>
+
+    <p>
+    يجب أن يكون عنوان OAuth نفسه مضافًا في Google Cloud.
     </p>
 
     <br>
@@ -377,6 +415,9 @@ def home():
 
     <meta charset="utf-8">
 
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1">
+
     <style>
 
         body {{
@@ -479,25 +520,11 @@ def home():
 
         <tr>
 
-            <th>
-                ID
-            </th>
-
-            <th>
-                الموضوع
-            </th>
-
-            <th>
-                الحالة
-            </th>
-
-            <th>
-                العنوان
-            </th>
-
-            <th>
-                الإجراء
-            </th>
+            <th>ID</th>
+            <th>الموضوع</th>
+            <th>الحالة</th>
+            <th>العنوان</th>
+            <th>الإجراء</th>
 
         </tr>
 
