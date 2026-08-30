@@ -35,8 +35,6 @@ if not SESSION_SECRET:
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
-    session_cookie="youtube_ai_session",
-    max_age=1800,
     https_only=True,
     same_site="lax",
 )
@@ -49,20 +47,16 @@ app.add_middleware(
 @app.get("/auth")
 def auth(request: Request):
 
-    url, state, code_verifier = authorization_url()
+    # authorization_url now returns:
+    # url, state, code_verifier, nonce
 
-    request.session.clear()
+    url, state, code_verifier, nonce = authorization_url()
 
     request.session["oauth_state"] = state
     request.session["code_verifier"] = code_verifier
-    request.session["oauth_started"] = int(time.time())
+    request.session["oauth_nonce"] = nonce
 
-    print("OAuth started")
-
-    return RedirectResponse(
-        url,
-        status_code=302
-    )
+    return RedirectResponse(url)
 
 
 @app.get("/oauth2callback")
@@ -74,13 +68,7 @@ def oauth2callback(
 
     saved_state = request.session.get("oauth_state")
     code_verifier = request.session.get("code_verifier")
-
-    print(
-        "OAuth callback:",
-        "state_received=", bool(state),
-        "state_saved=", bool(saved_state),
-        "verifier_saved=", bool(code_verifier)
-    )
+    saved_nonce = request.session.get("oauth_nonce")
 
     if not saved_state or not code_verifier:
 
@@ -89,17 +77,11 @@ def oauth2callback(
             <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
-            <meta name="viewport"
-                  content="width=device-width, initial-scale=1">
 
             <h2>❌ انتهت جلسة OAuth</h2>
 
             <p>
-            لم يتم العثور على جلسة المصادقة.
-            </p>
-
-            <p>
-            اضغط الزر وابدأ ربط YouTube من جديد.
+            افتح /auth وابدأ عملية الربط من جديد.
             </p>
 
             <a href="/auth">
@@ -112,8 +94,6 @@ def oauth2callback(
         )
 
     if state != saved_state:
-
-        print("OAuth ERROR: state mismatch")
 
         return HTMLResponse(
             """
@@ -160,25 +140,24 @@ def oauth2callback(
         finish_authorization(
             code,
             state,
-            code_verifier
+            code_verifier,
+            nonce=saved_nonce
         )
 
-        request.session.clear()
-
-        print("OAuth SUCCESS")
+        request.session.pop("oauth_state", None)
+        request.session.pop("code_verifier", None)
+        request.session.pop("oauth_nonce", None)
 
         return HTMLResponse(
             """
             <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
-            <meta name="viewport"
-                  content="width=device-width, initial-scale=1">
 
             <h2>✅ تم ربط YouTube بنجاح</h2>
 
             <p>
-            أصبح الوكيل قادرًا على الوصول إلى قناة YouTube.
+            أصبح بإمكان الوكيل الوصول إلى قناة YouTube.
             </p>
 
             <a href="/">
@@ -191,10 +170,7 @@ def oauth2callback(
 
     except Exception as e:
 
-        print(
-            "OAuth ERROR:",
-            repr(e)
-        )
+        print("OAuth ERROR:", repr(e))
 
         return HTMLResponse(
             f"""
@@ -267,9 +243,6 @@ def setup():
 
     <meta charset="utf-8">
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1">
-
     <style>
 
         body {
@@ -303,11 +276,7 @@ def setup():
     </p>
 
     <p>
-    يجب إضافة OAUTH_REDIRECT_URI في Render.
-    </p>
-
-    <p>
-    يجب أن يكون عنوان OAuth نفسه مضافًا في Google Cloud.
+    يجب أن تكون إعدادات Google OAuth تحتوي على عنوان إعادة التوجيه الخاص بـ Render.
     </p>
 
     <br>
@@ -415,9 +384,6 @@ def home():
 
     <meta charset="utf-8">
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1">
-
     <style>
 
         body {{
@@ -520,11 +486,25 @@ def home():
 
         <tr>
 
-            <th>ID</th>
-            <th>الموضوع</th>
-            <th>الحالة</th>
-            <th>العنوان</th>
-            <th>الإجراء</th>
+            <th>
+                ID
+            </th>
+
+            <th>
+                الموضوع
+            </th>
+
+            <th>
+                الحالة
+            </th>
+
+            <th>
+                العنوان
+            </th>
+
+            <th>
+                الإجراء
+            </th>
 
         </tr>
 
