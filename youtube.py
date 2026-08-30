@@ -1,6 +1,4 @@
-import json
 import os
-import secrets
 from pathlib import Path
 
 from google_auth_oauthlib.flow import Flow
@@ -20,7 +18,7 @@ SCOPES = [
 
 
 # ============================================================
-# FILE PATHS
+# FILES
 # ============================================================
 
 SECRET = Path(
@@ -31,13 +29,9 @@ TOKEN = Path(
     "credentials/token.json"
 )
 
-OAUTH_PENDING = Path(
-    "credentials/oauth_pending.json"
-)
-
 
 # ============================================================
-# DEFAULT OAUTH REDIRECT URI
+# REDIRECT URI
 # ============================================================
 
 DEFAULT_REDIRECT_URI = (
@@ -45,20 +39,25 @@ DEFAULT_REDIRECT_URI = (
 )
 
 
-# ============================================================
-# REDIRECT URI
-# ============================================================
-
 def get_redirect_uri():
 
-    return os.getenv(
+    value = os.getenv(
         "OAUTH_REDIRECT_URI",
         DEFAULT_REDIRECT_URI
-    ).strip()
+    )
+
+    value = value.strip()
+
+    if not value:
+        raise RuntimeError(
+            "OAUTH_REDIRECT_URI فارغ."
+        )
+
+    return value
 
 
 # ============================================================
-# CREATE GOOGLE OAUTH FLOW
+# CREATE OAUTH FLOW
 # ============================================================
 
 def get_flow(
@@ -72,56 +71,70 @@ def get_flow(
             "/etc/secrets/client_secret.json"
         )
 
-    flow = Flow.from_client_secrets_file(
-        str(SECRET),
-        scopes=SCOPES,
-        redirect_uri=get_redirect_uri(),
-    )
+    # --------------------------------------------------------
+    # إذا كان لدينا verifier من Session
+    # نضعه عند إنشاء Flow.
+    # --------------------------------------------------------
 
     if code_verifier:
 
-        flow.oauth2session._client.code_verifier = (
-            code_verifier
+        flow = Flow.from_client_secrets_file(
+            str(SECRET),
+            scopes=SCOPES,
+            redirect_uri=get_redirect_uri(),
+            code_verifier=code_verifier,
+        )
+
+    else:
+
+        # ----------------------------------------------------
+        # Google library تنشئ verifier جديدًا لهذه العملية.
+        # ----------------------------------------------------
+
+        flow = Flow.from_client_secrets_file(
+            str(SECRET),
+            scopes=SCOPES,
+            redirect_uri=get_redirect_uri(),
+            autogenerate_code_verifier=True,
         )
 
     return flow
 
 
 # ============================================================
-# START OAUTH
+# START AUTHORIZATION
 # ============================================================
 
 def authorization_url():
 
+    # --------------------------------------------------------
+    # إنشاء Flow جديد.
+    # هذا الـ Flow هو الذي سينشئ code_verifier.
+    # --------------------------------------------------------
+
     flow = get_flow()
 
     # --------------------------------------------------------
-    # إنشاء PKCE code verifier يدويًا
-    # --------------------------------------------------------
-
-    code_verifier = secrets.token_urlsafe(
-        64
-    )
-
-    flow.oauth2session._client.code_verifier = (
-        code_verifier
-    )
-
-    # --------------------------------------------------------
-    # إنشاء Google Authorization URL
+    # إنشاء رابط Google OAuth
     # --------------------------------------------------------
 
     url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
-        code_challenge_method="S256",
     )
 
-    if not url:
+    # --------------------------------------------------------
+    # الحصول على نفس verifier الذي استُخدم
+    # لإنشاء code_challenge.
+    # --------------------------------------------------------
+
+    code_verifier = flow.code_verifier
+
+    if not code_verifier:
 
         raise RuntimeError(
-            "تعذر إنشاء رابط Google OAuth."
+            "تعذر إنشاء OAuth code_verifier."
         )
 
     if not state:
@@ -129,31 +142,6 @@ def authorization_url():
         raise RuntimeError(
             "تعذر إنشاء OAuth state."
         )
-
-    # --------------------------------------------------------
-    # حفظ بيانات OAuth على الخادم
-    # --------------------------------------------------------
-
-    OAUTH_PENDING.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    OAUTH_PENDING.write_text(
-        json.dumps(
-            {
-                "state": state,
-                "code_verifier": code_verifier,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    # --------------------------------------------------------
-    # مهم:
-    # نعيد 3 قيم فقط لأن main.py يستقبل 3 قيم.
-    # --------------------------------------------------------
 
     return (
         url,
@@ -163,62 +151,18 @@ def authorization_url():
 
 
 # ============================================================
-# LOAD PENDING OAUTH
-# ============================================================
-
-def load_pending():
-
-    if not OAUTH_PENDING.exists():
-
-        return None
-
-    try:
-
-        data = json.loads(
-            OAUTH_PENDING.read_text(
-                encoding="utf-8"
-            )
-        )
-
-    except Exception:
-
-        return None
-
-    if not data.get("state"):
-
-        return None
-
-    if not data.get("code_verifier"):
-
-        return None
-
-    return data
-
-
-# ============================================================
-# CLEAR PENDING OAUTH
-# ============================================================
-
-def clear_pending():
-
-    try:
-
-        OAUTH_PENDING.unlink()
-
-    except FileNotFoundError:
-
-        pass
-
-
-# ============================================================
-# FINISH OAUTH
+# FINISH AUTHORIZATION
 # ============================================================
 
 def finish_authorization(
     code,
     state,
-    code_verifier=None,
+    code_verifier,
 ):
+
+    # --------------------------------------------------------
+    # التحقق من البيانات
+    # --------------------------------------------------------
 
     if not code:
 
@@ -232,54 +176,15 @@ def finish_authorization(
             "لم يتم استلام OAuth state من Google."
         )
 
-    # --------------------------------------------------------
-    # تحميل بيانات OAuth المحفوظة على الخادم
-    # --------------------------------------------------------
-
-    pending = load_pending()
-
-    if pending:
-
-        saved_state = pending.get(
-            "state"
-        )
-
-        saved_verifier = pending.get(
-            "code_verifier"
-        )
-
-        # ----------------------------------------------------
-        # التحقق من state
-        # ----------------------------------------------------
-
-        if saved_state != state:
-
-            clear_pending()
-
-            raise RuntimeError(
-                "OAuth state غير صحيح. "
-                "ابدأ عملية الربط من /auth مرة أخرى."
-            )
-
-        # ----------------------------------------------------
-        # نستخدم verifier المحفوظ على الخادم
-        # ----------------------------------------------------
-
-        code_verifier = saved_verifier
-
-    # --------------------------------------------------------
-    # إذا لم يوجد verifier نستخدم القيمة القادمة من Session
-    # --------------------------------------------------------
-
     if not code_verifier:
 
         raise RuntimeError(
-            "OAuth code_verifier مفقود. "
-            "ابدأ عملية الربط من /auth مرة أخرى."
+            "OAuth code_verifier مفقود."
         )
 
     # --------------------------------------------------------
-    # إنشاء Flow مع نفس code verifier
+    # إنشاء Flow باستخدام نفس verifier بالضبط
+    # الذي تم استخدامه في authorization_url().
     # --------------------------------------------------------
 
     flow = get_flow(
@@ -287,10 +192,9 @@ def finish_authorization(
     )
 
     # --------------------------------------------------------
-    # استبدال authorization code بالتوكن
+    # استبدال authorization code بالتوكن.
     #
-    # مهم جدًا:
-    # نرسل code_verifier صراحةً إلى Google.
+    # code_verifier هنا يُرسل صراحةً إلى Google.
     # --------------------------------------------------------
 
     flow.fetch_token(
@@ -308,7 +212,7 @@ def finish_authorization(
     if not creds:
 
         raise RuntimeError(
-            "Google لم تُرجع بيانات Credentials."
+            "Google لم تُرجع Credentials."
         )
 
     # --------------------------------------------------------
@@ -324,12 +228,6 @@ def finish_authorization(
         creds.to_json(),
         encoding="utf-8",
     )
-
-    # --------------------------------------------------------
-    # حذف بيانات OAuth المؤقتة
-    # --------------------------------------------------------
-
-    clear_pending()
 
     return creds
 
@@ -348,7 +246,7 @@ def service():
         )
 
     # --------------------------------------------------------
-    # قراءة Credentials
+    # تحميل Credentials
     # --------------------------------------------------------
 
     creds = Credentials.from_authorized_user_file(
@@ -357,8 +255,7 @@ def service():
     )
 
     # --------------------------------------------------------
-    # إذا كان التوكن منتهيًا
-    # نحاول تجديده باستخدام refresh token.
+    # تجديد Access Token إذا كان منتهيًا
     # --------------------------------------------------------
 
     if not creds.valid:
@@ -400,7 +297,7 @@ def service():
 
 
 # ============================================================
-# UPLOAD PRIVATE VIDEO
+# UPLOAD PRIVATE
 # ============================================================
 
 def upload_private(
@@ -413,7 +310,7 @@ def upload_private(
     yt = service()
 
     # --------------------------------------------------------
-    # Video metadata
+    # بيانات الفيديو
     # --------------------------------------------------------
 
     body = {
@@ -428,7 +325,7 @@ def upload_private(
     }
 
     # --------------------------------------------------------
-    # Video file
+    # ملف الفيديو
     # --------------------------------------------------------
 
     media = MediaFileUpload(
@@ -438,7 +335,7 @@ def upload_private(
     )
 
     # --------------------------------------------------------
-    # Upload request
+    # إنشاء طلب الرفع
     # --------------------------------------------------------
 
     request = yt.videos().insert(
@@ -450,7 +347,7 @@ def upload_private(
     response = None
 
     # --------------------------------------------------------
-    # Resumable upload
+    # رفع الفيديو
     # --------------------------------------------------------
 
     while response is None:
@@ -472,11 +369,11 @@ def upload_private(
     if not video_id:
 
         raise RuntimeError(
-            "YouTube لم تُرجع video ID."
+            "لم يتم الحصول على video_id."
         )
 
     # --------------------------------------------------------
-    # Upload thumbnail if provided
+    # الصورة المصغرة
     # --------------------------------------------------------
 
     if (
@@ -496,7 +393,7 @@ def upload_private(
 
 
 # ============================================================
-# PUBLISH VIDEO
+# PUBLISH
 # ============================================================
 
 def publish(
@@ -523,7 +420,7 @@ def publish(
 
 
 # ============================================================
-# CHECK VIDEO PROCESSING STATUS
+# PROCESSING STATUS
 # ============================================================
 
 def processing(
