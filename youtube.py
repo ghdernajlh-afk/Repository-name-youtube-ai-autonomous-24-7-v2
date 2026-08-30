@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 from pathlib import Path
 
 from google_auth_oauthlib.flow import Flow
@@ -30,6 +31,7 @@ def get_redirect_uri():
 
 
 def get_flow(code_verifier=None):
+
     if not SECRET.exists():
         raise RuntimeError(
             "client_secret.json غير موجود في "
@@ -49,23 +51,27 @@ def get_flow(code_verifier=None):
 
 
 def authorization_url():
+
     flow = get_flow()
+
+    # إنشاء PKCE verifier يدويًا لضمان توافق
+    # جميع إصدارات مكتبة Google OAuth.
+    code_verifier = secrets.token_urlsafe(64)
+
+    flow.oauth2session._client.code_verifier = code_verifier
 
     url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
+        code_challenge_method="S256",
     )
 
-    code_verifier = flow.oauth2session._client.code_verifier
-
-    if not code_verifier:
+    if not state:
         raise RuntimeError(
-            "تعذر إنشاء OAuth code_verifier."
+            "تعذر إنشاء OAuth state."
         )
 
-    # نحفظ بيانات OAuth على الخادم بدل الاعتماد
-    # على Cookie الخاصة بالمتصفح.
     OAUTH_PENDING.parent.mkdir(
         parents=True,
         exist_ok=True
@@ -76,8 +82,7 @@ def authorization_url():
             {
                 "state": state,
                 "code_verifier": code_verifier,
-            },
-            ensure_ascii=False
+            }
         ),
         encoding="utf-8"
     )
@@ -86,15 +91,18 @@ def authorization_url():
 
 
 def load_pending():
+
     if not OAUTH_PENDING.exists():
         return None
 
     try:
+
         data = json.loads(
             OAUTH_PENDING.read_text(
                 encoding="utf-8"
             )
         )
+
     except Exception:
         return None
 
@@ -108,6 +116,7 @@ def load_pending():
 
 
 def clear_pending():
+
     try:
         OAUTH_PENDING.unlink()
     except FileNotFoundError:
@@ -119,6 +128,7 @@ def finish_authorization(
     state,
     code_verifier=None
 ):
+
     if not code:
         raise RuntimeError(
             "لم يتم استلام authorization code من Google."
@@ -134,6 +144,7 @@ def finish_authorization(
     if pending:
 
         if state != pending["state"]:
+
             clear_pending()
 
             raise RuntimeError(
@@ -204,6 +215,7 @@ def service():
             )
 
         else:
+
             raise RuntimeError(
                 "انتهت صلاحية YouTube OAuth. "
                 "افتح /auth لإعادة الربط."
