@@ -1,5 +1,5 @@
+import json
 import os
-import secrets
 from pathlib import Path
 
 from google_auth_oauthlib.flow import Flow
@@ -15,23 +15,31 @@ SCOPES = [
 
 SECRET = Path("/etc/secrets/client_secret.json")
 TOKEN = Path("credentials/token.json")
+OAUTH_PENDING = Path("credentials/oauth_pending.json")
+
+DEFAULT_REDIRECT_URI = (
+    "https://youtube-ai-agent-yich.onrender.com/oauth2callback"
+)
+
+
+def get_redirect_uri():
+    return os.getenv(
+        "OAUTH_REDIRECT_URI",
+        DEFAULT_REDIRECT_URI
+    ).strip()
 
 
 def get_flow(code_verifier=None):
     if not SECRET.exists():
         raise RuntimeError(
-            "ضع client_secret.json في Render Secret Files"
+            "client_secret.json غير موجود في "
+            "/etc/secrets/client_secret.json"
         )
-
-    redirect_uri = os.getenv(
-        "OAUTH_REDIRECT_URI",
-        "http://localhost:8000/oauth2callback"
-    )
 
     flow = Flow.from_client_secrets_file(
         str(SECRET),
         scopes=SCOPES,
-        redirect_uri=redirect_uri,
+        redirect_uri=get_redirect_uri(),
     )
 
     if code_verifier:
@@ -51,14 +59,66 @@ def authorization_url():
 
     code_verifier = flow.oauth2session._client.code_verifier
 
-    # نستخدم state عشوائيًا إضافيًا للتأكد من أن
-    # عملية OAuth بدأت من تطبيقنا.
-    nonce = secrets.token_urlsafe(32)
+    if not code_verifier:
+        raise RuntimeError(
+            "تعذر إنشاء OAuth code_verifier."
+        )
 
-    return url, state, code_verifier, nonce
+    # نحفظ بيانات OAuth على الخادم بدل الاعتماد
+    # على Cookie الخاصة بالمتصفح.
+    OAUTH_PENDING.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    OAUTH_PENDING.write_text(
+        json.dumps(
+            {
+                "state": state,
+                "code_verifier": code_verifier,
+            },
+            ensure_ascii=False
+        ),
+        encoding="utf-8"
+    )
+
+    return url, state, code_verifier
 
 
-def finish_authorization(code, state, code_verifier):
+def load_pending():
+    if not OAUTH_PENDING.exists():
+        return None
+
+    try:
+        data = json.loads(
+            OAUTH_PENDING.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception:
+        return None
+
+    if not data.get("state"):
+        return None
+
+    if not data.get("code_verifier"):
+        return None
+
+    return data
+
+
+def clear_pending():
+    try:
+        OAUTH_PENDING.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def finish_authorization(
+    code,
+    state,
+    code_verifier=None
+):
     if not code:
         raise RuntimeError(
             "لم يتم استلام authorization code من Google."
@@ -69,12 +129,29 @@ def finish_authorization(code, state, code_verifier):
             "لم يتم استلام OAuth state من Google."
         )
 
+    pending = load_pending()
+
+    if pending:
+
+        if state != pending["state"]:
+            clear_pending()
+
+            raise RuntimeError(
+                "OAuth state غير صحيح. "
+                "ابدأ الربط من /auth مرة أخرى."
+            )
+
+        code_verifier = pending["code_verifier"]
+
     if not code_verifier:
         raise RuntimeError(
-            "OAuth code_verifier مفقود."
+            "OAuth code_verifier مفقود. "
+            "ابدأ الربط من /auth مرة أخرى."
         )
 
-    flow = get_flow(code_verifier=code_verifier)
+    flow = get_flow(
+        code_verifier=code_verifier
+    )
 
     flow.fetch_token(
         code=code,
@@ -93,13 +170,17 @@ def finish_authorization(code, state, code_verifier):
         encoding="utf-8"
     )
 
+    clear_pending()
+
     return creds
 
 
 def service():
+
     if not TOKEN.exists():
         raise RuntimeError(
-            "YouTube غير مربوط بعد. افتح /auth لبدء ربط الحساب."
+            "YouTube غير مربوط بعد. "
+            "افتح /auth لبدء ربط الحساب."
         )
 
     creds = Credentials.from_authorized_user_file(
@@ -108,18 +189,24 @@ def service():
     )
 
     if not creds.valid:
+
         if creds.expired and creds.refresh_token:
+
             from google.auth.transport.requests import Request
 
-            creds.refresh(Request())
+            creds.refresh(
+                Request()
+            )
 
             TOKEN.write_text(
                 creds.to_json(),
                 encoding="utf-8"
             )
+
         else:
             raise RuntimeError(
-                "انتهت صلاحية YouTube OAuth. افتح /auth لإعادة الربط."
+                "انتهت صلاحية YouTube OAuth. "
+                "افتح /auth لإعادة الربط."
             )
 
     return build(
@@ -135,6 +222,7 @@ def upload_private(
     description,
     thumbnail=None
 ):
+
     yt = service()
 
     body = {
@@ -163,11 +251,13 @@ def upload_private(
     response = None
 
     while response is None:
+
         status, response = request.next_chunk()
 
     video_id = response["id"]
 
     if thumbnail and Path(thumbnail).exists():
+
         yt.thumbnails().set(
             videoId=video_id,
             media_body=MediaFileUpload(
@@ -180,6 +270,7 @@ def upload_private(
 
 
 def publish(video_id):
+
     yt = service()
 
     return yt.videos().update(
@@ -194,6 +285,7 @@ def publish(video_id):
 
 
 def processing(video_id):
+
     yt = service()
 
     response = yt.videos().list(
@@ -201,7 +293,10 @@ def processing(video_id):
         id=video_id
     ).execute()
 
-    items = response.get("items", [])
+    items = response.get(
+        "items",
+        []
+    )
 
     if not items:
         return {}
