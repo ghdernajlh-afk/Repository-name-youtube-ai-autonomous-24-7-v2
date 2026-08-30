@@ -405,8 +405,8 @@ def setup():
     <h3>المتطلبات</h3>
 
     <p>
-    يجب إضافة OPENAI_API_KEY في
-    Render → Environment Variables.
+يمكن إضافة GEMINI_API_KEY في
+Render → Environment Variables.
     </p>
 
     <p>
