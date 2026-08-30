@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 
 from google_auth_oauthlib.flow import Flow
@@ -50,10 +51,29 @@ def authorization_url():
 
     code_verifier = flow.oauth2session._client.code_verifier
 
-    return url, state, code_verifier
+    # نستخدم state عشوائيًا إضافيًا للتأكد من أن
+    # عملية OAuth بدأت من تطبيقنا.
+    nonce = secrets.token_urlsafe(32)
+
+    return url, state, code_verifier, nonce
 
 
 def finish_authorization(code, state, code_verifier):
+    if not code:
+        raise RuntimeError(
+            "لم يتم استلام authorization code من Google."
+        )
+
+    if not state:
+        raise RuntimeError(
+            "لم يتم استلام OAuth state من Google."
+        )
+
+    if not code_verifier:
+        raise RuntimeError(
+            "OAuth code_verifier مفقود."
+        )
+
     flow = get_flow(code_verifier=code_verifier)
 
     flow.fetch_token(
@@ -88,9 +108,19 @@ def service():
     )
 
     if not creds.valid:
-        raise RuntimeError(
-            "انتهت صلاحية YouTube OAuth. افتح /auth لإعادة الربط."
-        )
+        if creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+
+            creds.refresh(Request())
+
+            TOKEN.write_text(
+                creds.to_json(),
+                encoding="utf-8"
+            )
+        else:
+            raise RuntimeError(
+                "انتهت صلاحية YouTube OAuth. افتح /auth لإعادة الربط."
+            )
 
     return build(
         "youtube",
