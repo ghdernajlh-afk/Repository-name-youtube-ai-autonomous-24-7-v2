@@ -71,11 +71,6 @@ def get_flow(
             "/etc/secrets/client_secret.json"
         )
 
-    # --------------------------------------------------------
-    # إذا كان لدينا verifier من Session
-    # نضعه عند إنشاء Flow.
-    # --------------------------------------------------------
-
     if code_verifier:
 
         flow = Flow.from_client_secrets_file(
@@ -86,10 +81,6 @@ def get_flow(
         )
 
     else:
-
-        # ----------------------------------------------------
-        # Google library تنشئ verifier جديدًا لهذه العملية.
-        # ----------------------------------------------------
 
         flow = Flow.from_client_secrets_file(
             str(SECRET),
@@ -107,27 +98,13 @@ def get_flow(
 
 def authorization_url():
 
-    # --------------------------------------------------------
-    # إنشاء Flow جديد.
-    # هذا الـ Flow هو الذي سينشئ code_verifier.
-    # --------------------------------------------------------
-
     flow = get_flow()
-
-    # --------------------------------------------------------
-    # إنشاء رابط Google OAuth
-    # --------------------------------------------------------
 
     url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
-
-    # --------------------------------------------------------
-    # الحصول على نفس verifier الذي استُخدم
-    # لإنشاء code_challenge.
-    # --------------------------------------------------------
 
     code_verifier = flow.code_verifier
 
@@ -160,10 +137,6 @@ def finish_authorization(
     code_verifier,
 ):
 
-    # --------------------------------------------------------
-    # التحقق من البيانات
-    # --------------------------------------------------------
-
     if not code:
 
         raise RuntimeError(
@@ -182,30 +155,15 @@ def finish_authorization(
             "OAuth code_verifier مفقود."
         )
 
-    # --------------------------------------------------------
-    # إنشاء Flow باستخدام نفس verifier بالضبط
-    # الذي تم استخدامه في authorization_url().
-    # --------------------------------------------------------
-
     flow = get_flow(
         code_verifier=code_verifier
     )
-
-    # --------------------------------------------------------
-    # استبدال authorization code بالتوكن.
-    #
-    # code_verifier هنا يُرسل صراحةً إلى Google.
-    # --------------------------------------------------------
 
     flow.fetch_token(
         code=code,
         include_client_id=True,
         code_verifier=code_verifier,
     )
-
-    # --------------------------------------------------------
-    # الحصول على Credentials
-    # --------------------------------------------------------
 
     creds = flow.credentials
 
@@ -214,10 +172,6 @@ def finish_authorization(
         raise RuntimeError(
             "Google لم تُرجع Credentials."
         )
-
-    # --------------------------------------------------------
-    # حفظ التوكن
-    # --------------------------------------------------------
 
     TOKEN.parent.mkdir(
         parents=True,
@@ -245,18 +199,10 @@ def service():
             "افتح /auth لبدء ربط الحساب."
         )
 
-    # --------------------------------------------------------
-    # تحميل Credentials
-    # --------------------------------------------------------
-
     creds = Credentials.from_authorized_user_file(
         str(TOKEN),
         SCOPES,
     )
-
-    # --------------------------------------------------------
-    # تجديد Access Token إذا كان منتهيًا
-    # --------------------------------------------------------
 
     if not creds.valid:
 
@@ -285,10 +231,6 @@ def service():
                 "افتح /auth لإعادة الربط."
             )
 
-    # --------------------------------------------------------
-    # إنشاء YouTube API service
-    # --------------------------------------------------------
-
     return build(
         "youtube",
         "v3",
@@ -309,10 +251,6 @@ def upload_private(
 
     yt = service()
 
-    # --------------------------------------------------------
-    # بيانات الفيديو
-    # --------------------------------------------------------
-
     body = {
         "snippet": {
             "title": title,
@@ -324,19 +262,11 @@ def upload_private(
         },
     }
 
-    # --------------------------------------------------------
-    # ملف الفيديو
-    # --------------------------------------------------------
-
     media = MediaFileUpload(
         path,
         chunksize=8 * 1024 * 1024,
         resumable=True,
     )
-
-    # --------------------------------------------------------
-    # إنشاء طلب الرفع
-    # --------------------------------------------------------
 
     request = yt.videos().insert(
         part="snippet,status",
@@ -345,10 +275,6 @@ def upload_private(
     )
 
     response = None
-
-    # --------------------------------------------------------
-    # رفع الفيديو
-    # --------------------------------------------------------
 
     while response is None:
 
@@ -373,21 +299,37 @@ def upload_private(
         )
 
     # --------------------------------------------------------
-    # الصورة المصغرة
+    # الصورة المصغرة - اختيارية
+    # --------------------------------------------------------
+    # إذا رفض YouTube رفع الصورة بسبب الصلاحيات،
+    # لا نفشل عملية رفع الفيديو.
     # --------------------------------------------------------
 
     if (
         thumbnail
         and Path(thumbnail).exists()
     ):
+        try:
 
-        yt.thumbnails().set(
-            videoId=video_id,
-            media_body=MediaFileUpload(
-                thumbnail,
-                mimetype="image/jpeg",
-            ),
-        ).execute()
+            yt.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(
+                    thumbnail,
+                    mimetype="image/jpeg",
+                ),
+            ).execute()
+
+            print(
+                f"[YOUTUBE] Thumbnail uploaded for {video_id}",
+                flush=True
+            )
+
+        except Exception as e:
+
+            print(
+                f"[YOUTUBE] Thumbnail upload skipped: {repr(e)}",
+                flush=True
+            )
 
     return video_id
 
