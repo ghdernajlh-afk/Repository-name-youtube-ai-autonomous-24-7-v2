@@ -7,9 +7,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from dotenv import load_dotenv
+
 from db import *
 from worker import run_job, upload_job, publish_job, autopilot_once
-
 from youtube import authorization_url, finish_authorization
 
 
@@ -20,14 +20,17 @@ init()
 app = FastAPI(title="YouTube AI Autonomous 24/7")
 
 
-# =========================
-# Secure OAuth Session
-# =========================
+# ============================================================
+# SESSION / OAUTH
+# ============================================================
 
-SESSION_SECRET = os.getenv(
-    "OAUTH_SESSION_SECRET",
-    "change-this-secret"
-)
+SESSION_SECRET = os.getenv("OAUTH_SESSION_SECRET")
+
+if not SESSION_SECRET:
+    raise RuntimeError(
+        "OAUTH_SESSION_SECRET is missing. "
+        "Add it in Render Environment Variables."
+    )
 
 app.add_middleware(
     SessionMiddleware,
@@ -37,9 +40,9 @@ app.add_middleware(
 )
 
 
-# =========================
-# YouTube OAuth
-# =========================
+# ============================================================
+# YOUTUBE AUTH
+# ============================================================
 
 @app.get("/auth")
 def auth(request: Request):
@@ -55,7 +58,7 @@ def auth(request: Request):
 @app.get("/oauth2callback")
 def oauth2callback(
     request: Request,
-    code: str,
+    code: str = "",
     state: str = ""
 ):
 
@@ -63,8 +66,10 @@ def oauth2callback(
     code_verifier = request.session.get("code_verifier")
 
     if not saved_state or not code_verifier:
+
         return HTMLResponse(
             """
+            <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
 
@@ -84,8 +89,10 @@ def oauth2callback(
         )
 
     if state != saved_state:
+
         return HTMLResponse(
             """
+            <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
 
@@ -104,6 +111,25 @@ def oauth2callback(
             status_code=400
         )
 
+    if not code:
+
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <h2>❌ لم يتم استلام رمز Google</h2>
+
+            <a href="/auth">
+                🔗 إعادة المحاولة
+            </a>
+
+            </html>
+            """,
+            status_code=400
+        )
+
     try:
 
         finish_authorization(
@@ -115,19 +141,44 @@ def oauth2callback(
         request.session.pop("oauth_state", None)
         request.session.pop("code_verifier", None)
 
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <h2>✅ تم ربط YouTube بنجاح</h2>
+
+            <p>
+            أصبح بإمكان الوكيل الوصول إلى قناة YouTube.
+            </p>
+
+            <a href="/">
+                العودة إلى الوكيل
+            </a>
+
+            </html>
+            """
+        )
+
     except Exception as e:
 
         print("OAuth ERROR:", repr(e))
 
         return HTMLResponse(
-            """
+            f"""
+            <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
 
             <h2>❌ فشل ربط YouTube</h2>
 
             <p>
-            حدث خطأ أثناء حفظ صلاحية YouTube.
+            حدث خطأ أثناء إكمال المصادقة.
+            </p>
+
+            <p>
+            {str(e)}
             </p>
 
             <a href="/auth">
@@ -139,56 +190,25 @@ def oauth2callback(
             status_code=500
         )
 
-    return HTMLResponse("""
-    <html lang="ar" dir="rtl">
-    <meta charset="utf-8">
 
-    <style>
-        body {
-            font-family: Arial;
-            max-width: 800px;
-            margin: 50px auto;
-            text-align: center;
-        }
-
-        a {
-            display: inline-block;
-            margin-top: 20px;
-            padding: 12px 20px;
-            background: #222;
-            color: white;
-            text-decoration: none;
-            border-radius: 8px;
-        }
-    </style>
-
-    <h2>✅ تم ربط حساب YouTube بنجاح</h2>
-
-    <p>
-        تم حفظ صلاحية الوصول إلى قناة YouTube.
-    </p>
-
-    <a href="/">
-        العودة إلى الوكيل
-    </a>
-
-    </html>
-    """)
-
-
-# =========================
-# Autopilot
-# =========================
+# ============================================================
+# AUTOPILOT
+# ============================================================
 
 def autopilot_loop():
 
     while True:
 
         try:
+
             autopilot_once()
 
         except Exception as e:
-            print("Autopilot ERROR:", repr(e))
+
+            print(
+                "Autopilot ERROR:",
+                repr(e)
+            )
 
         time.sleep(3600)
 
@@ -199,54 +219,68 @@ threading.Thread(
 ).start()
 
 
-# =========================
-# Setup
-# =========================
+# ============================================================
+# SETUP
+# ============================================================
 
-@app.get("/setup", response_class=HTMLResponse)
+@app.get(
+    "/setup",
+    response_class=HTMLResponse
+)
 def setup():
 
     return """
-    <html lang='ar' dir='rtl'>
-    <meta charset='utf-8'>
+    <!doctype html>
+
+    <html lang="ar" dir="rtl">
+
+    <meta charset="utf-8">
 
     <style>
+
         body {
             font-family: Arial;
             max-width: 800px;
             margin: 40px auto;
+            padding: 20px;
         }
 
-        input, button {
-            padding: 10px;
-            margin: 5px;
+        button {
+            padding: 12px 20px;
+            cursor: pointer;
         }
 
         a {
-            display: inline-block;
-            margin: 8px;
+            text-decoration: none;
         }
+
     </style>
 
-    <h1>إعداد الوكيل</h1>
+    <h1>⚙️ إعداد الوكيل</h1>
+
+    <h3>المتطلبات</h3>
 
     <p>
-        ضع OPENAI_API_KEY في Environment Variables.
+    يجب إضافة OPENAI_API_KEY في Render → Environment Variables.
     </p>
 
     <p>
-        ضع client_secret.json داخل Render Secret Files.
+    يجب إضافة OAUTH_SESSION_SECRET في Render → Environment Variables.
     </p>
 
     <p>
-        بعد ذلك اضغط الزر التالي لربط قناة YouTube:
+    يجب أن تكون إعدادات Google OAuth تحتوي على عنوان إعادة التوجيه الخاص بـ Render.
     </p>
-
-    <a href="/auth">
-        <button>🔗 ربط YouTube</button>
-    </a>
 
     <br>
+
+    <a href="/auth">
+        <button>
+            🔗 ربط قناة YouTube
+        </button>
+    </a>
+
+    <br><br>
 
     <a href="/">
         العودة إلى Dashboard
@@ -256,11 +290,14 @@ def setup():
     """
 
 
-# =========================
-# Dashboard
-# =========================
+# ============================================================
+# DASHBOARD
+# ============================================================
 
-@app.get("/", response_class=HTMLResponse)
+@app.get(
+    "/",
+    response_class=HTMLResponse
+)
 def home():
 
     rows = jobs()
@@ -269,44 +306,76 @@ def home():
 
     for j in rows:
 
-        act = ""
+        action = ""
 
         if j["status"] == "ready":
 
-            act = f"""
-            <form method='post' action='/upload/{j["id"]}'>
-                <button>رفع Private</button>
+            action = f"""
+            <form
+                method="post"
+                action="/upload/{j['id']}"
+            >
+                <button>
+                    رفع Private
+                </button>
             </form>
             """
 
         elif j["status"] == "uploaded_private":
 
-            act = f"""
-            <form method='post' action='/publish/{j["id"]}'>
-                <button>نشر Public</button>
+            action = f"""
+            <form
+                method="post"
+                action="/publish/{j['id']}"
+            >
+                <button>
+                    نشر Public
+                </button>
             </form>
             """
 
         tr += f"""
         <tr>
-            <td>{j["id"]}</td>
-            <td>{j["topic"]}</td>
-            <td>{j["status"]}</td>
-            <td>{j["title"] or ""}</td>
-            <td>{act}</td>
+
+            <td>
+                {j["id"]}
+            </td>
+
+            <td>
+                {j["topic"]}
+            </td>
+
+            <td>
+                {j["status"]}
+            </td>
+
+            <td>
+                {j["title"] or ""}
+            </td>
+
+            <td>
+                {action}
+            </td>
+
         </tr>
         """
 
-    ap = os.getenv(
+    autopilot_status = os.getenv(
         "AUTOPILOT",
         "false"
     )
 
+    daily_limit = os.getenv(
+        "DAILY_JOB_LIMIT",
+        "2"
+    )
+
     return f"""
     <!doctype html>
-    <html lang='ar' dir='rtl'>
 
-    <meta charset='utf-8'>
+    <html lang="ar" dir="rtl">
+
+    <meta charset="utf-8">
 
     <style>
 
@@ -314,9 +383,11 @@ def home():
             font-family: Arial;
             max-width: 1200px;
             margin: 30px auto;
+            padding: 20px;
         }}
 
-        input, button {{
+        input,
+        button {{
             padding: 10px;
             margin: 4px;
         }}
@@ -326,9 +397,15 @@ def home():
             border-collapse: collapse;
         }}
 
-        td, th {{
-            padding: 8px;
+        th,
+        td {{
+            padding: 10px;
             border-bottom: 1px solid #ddd;
+            text-align: right;
+        }}
+
+        a {{
+            text-decoration: none;
         }}
 
     </style>
@@ -339,29 +416,42 @@ def home():
 
     <p>
         Autopilot:
-        <b>{ap}</b>
-        —
+        <b>{autopilot_status}</b>
+    </p>
+
+    <p>
         الحد اليومي:
-        {os.getenv("DAILY_JOB_LIMIT", "2")}
+        <b>{daily_limit}</b>
     </p>
 
     <p>
 
         <a href="/auth">
+
             <button>
                 🔗 ربط حساب YouTube
             </button>
+
         </a>
 
     </p>
 
-    <form method='post' action='/create'>
+    <hr>
+
+    <h3>
+        إنشاء فيديو
+    </h3>
+
+    <form
+        method="post"
+        action="/create"
+    >
 
         <input
-            name='topic'
+            name="topic"
             required
-            placeholder='اكتب موضوعاً أو اترك الوكيل يبحث بنفسه'
-            style='width:60%'
+            placeholder="اكتب موضوع الفيديو"
+            style="width:60%;"
         >
 
         <button>
@@ -370,46 +460,64 @@ def home():
 
     </form>
 
+    <br>
 
-    <form method='post' action='/autopilot'>
+    <form
+        method="post"
+        action="/autopilot"
+    >
 
         <button>
-            تفعيل Autopilot
+            🤖 تفعيل Autopilot
         </button>
 
     </form>
 
+    <br>
 
     <table>
 
         <tr>
-            <th>ID</th>
-            <th>الموضوع</th>
-            <th>الحالة</th>
-            <th>العنوان</th>
-            <th>إجراء</th>
+
+            <th>
+                ID
+            </th>
+
+            <th>
+                الموضوع
+            </th>
+
+            <th>
+                الحالة
+            </th>
+
+            <th>
+                العنوان
+            </th>
+
+            <th>
+                الإجراء
+            </th>
+
         </tr>
 
         {tr}
 
     </table>
 
+    <br>
 
-    <p>
-
-        <a href='/setup'>
-            الإعداد
-        </a>
-
-    </p>
+    <a href="/setup">
+        ⚙️ الإعداد
+    </a>
 
     </html>
     """
 
 
-# =========================
-# Create Job
-# =========================
+# ============================================================
+# CREATE JOB
+# ============================================================
 
 @app.post("/create")
 def create(
@@ -434,28 +542,28 @@ def create(
 
     return RedirectResponse(
         "/",
-        303
+        status_code=303
     )
 
 
-# =========================
-# Autopilot
-# =========================
+# ============================================================
+# AUTOPILOT BUTTON
+# ============================================================
 
 @app.post("/autopilot")
-def autopilot():
+def enable_autopilot():
 
     os.environ["AUTOPILOT"] = "true"
 
     return RedirectResponse(
         "/",
-        303
+        status_code=303
     )
 
 
-# =========================
-# Upload
-# =========================
+# ============================================================
+# UPLOAD
+# ============================================================
 
 @app.post("/upload/{jid}")
 def upload(jid: int):
@@ -464,13 +572,13 @@ def upload(jid: int):
 
     return RedirectResponse(
         "/",
-        303
+        status_code=303
     )
 
 
-# =========================
-# Publish
-# =========================
+# ============================================================
+# PUBLISH
+# ============================================================
 
 @app.post("/publish/{jid}")
 def publish(jid: int):
@@ -479,5 +587,5 @@ def publish(jid: int):
 
     return RedirectResponse(
         "/",
-        303
+        status_code=303
     )
