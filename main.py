@@ -6,7 +6,6 @@ from html import escape
 from fastapi import (
     FastAPI,
     Form,
-    BackgroundTasks,
     Request,
 )
 from fastapi.responses import (
@@ -14,7 +13,6 @@ from fastapi.responses import (
     RedirectResponse,
 )
 from starlette.middleware.sessions import SessionMiddleware
-
 from dotenv import load_dotenv
 
 from db import (
@@ -34,7 +32,6 @@ from youtube import (
     authorization_url,
     finish_authorization,
 )
-
 
 load_dotenv()
 
@@ -69,7 +66,6 @@ if not SESSION_SECRET:
         "Add it in Render Environment Variables."
     )
 
-
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -86,11 +82,8 @@ app.add_middleware(
 def auth(request: Request):
 
     try:
-
         result = authorization_url()
 
-        # youtube.py الجديد يعيد 3 قيم
-        # url, state, code_verifier
         if len(result) != 3:
             raise RuntimeError(
                 "authorization_url() returned an "
@@ -99,10 +92,13 @@ def auth(request: Request):
 
         url, state, code_verifier = result
 
-        # نحتفظ بها أيضًا في Session
-        # للتوافق مع المتصفح.
         request.session["oauth_state"] = state
         request.session["code_verifier"] = code_verifier
+
+        print(
+            "[AUTH] OAuth authorization started",
+            flush=True
+        )
 
         return RedirectResponse(
             url=url,
@@ -112,8 +108,9 @@ def auth(request: Request):
     except Exception as e:
 
         print(
-            "AUTH START ERROR:",
-            repr(e)
+            "[AUTH] ERROR:",
+            repr(e),
+            flush=True
         )
 
         return HTMLResponse(
@@ -124,9 +121,7 @@ def auth(request: Request):
 
             <h2>❌ فشل بدء ربط YouTube</h2>
 
-            <p>
-            {escape(str(e))}
-            </p>
+            <p>{escape(str(e))}</p>
 
             <p>
             تأكد من وجود client_secret.json
@@ -155,15 +150,12 @@ def oauth2callback(
     error: str = "",
 ):
 
-    # --------------------------------------------------------
-    # Google returned an OAuth error
-    # --------------------------------------------------------
-
     if error:
 
         print(
-            "GOOGLE OAUTH ERROR:",
-            error
+            "[AUTH] GOOGLE OAUTH ERROR:",
+            error,
+            flush=True
         )
 
         return HTMLResponse(
@@ -188,11 +180,6 @@ def oauth2callback(
             status_code=400,
         )
 
-
-    # --------------------------------------------------------
-    # Get values from browser session
-    # --------------------------------------------------------
-
     saved_state = request.session.get(
         "oauth_state"
     )
@@ -200,14 +187,6 @@ def oauth2callback(
     code_verifier = request.session.get(
         "code_verifier"
     )
-
-
-    # --------------------------------------------------------
-    # Important:
-    # youtube.py also stores the pending OAuth data
-    # on the server. Therefore, the browser Session
-    # is not the only source.
-    # --------------------------------------------------------
 
     if not state:
 
@@ -219,10 +198,6 @@ def oauth2callback(
 
             <h2>❌ لم يتم استلام OAuth State</h2>
 
-            <p>
-            ابدأ عملية الربط من جديد.
-            </p>
-
             <a href="/auth">
                 🔗 إعادة ربط YouTube
             </a>
@@ -231,7 +206,6 @@ def oauth2callback(
             """,
             status_code=400,
         )
-
 
     if not code:
 
@@ -243,10 +217,6 @@ def oauth2callback(
 
             <h2>❌ لم يتم استلام رمز Google</h2>
 
-            <p>
-            ابدأ عملية الربط من جديد.
-            </p>
-
             <a href="/auth">
                 🔗 إعادة المحاولة
             </a>
@@ -256,18 +226,11 @@ def oauth2callback(
             status_code=400,
         )
 
-
-    # --------------------------------------------------------
-    # If browser session exists, verify it.
-    #
-    # If it does not exist, youtube.py can still validate
-    # the pending OAuth transaction saved on the server.
-    # --------------------------------------------------------
-
     if saved_state and saved_state != state:
 
         print(
-            "OAUTH SESSION STATE MISMATCH"
+            "[AUTH] OAUTH SESSION STATE MISMATCH",
+            flush=True
         )
 
         return HTMLResponse(
@@ -278,10 +241,6 @@ def oauth2callback(
 
             <h2>❌ OAuth State غير صحيح</h2>
 
-            <p>
-            أعد عملية الربط من /auth.
-            </p>
-
             <a href="/auth">
                 🔗 إعادة ربط YouTube
             </a>
@@ -291,11 +250,6 @@ def oauth2callback(
             status_code=400,
         )
 
-
-    # --------------------------------------------------------
-    # Finish OAuth
-    # --------------------------------------------------------
-
     try:
 
         finish_authorization(
@@ -304,7 +258,6 @@ def oauth2callback(
             code_verifier=code_verifier,
         )
 
-        # Clear browser session
         request.session.pop(
             "oauth_state",
             None
@@ -315,17 +268,16 @@ def oauth2callback(
             None
         )
 
+        print(
+            "[AUTH] YouTube authorization completed",
+            flush=True
+        )
+
         return HTMLResponse(
             """
             <!doctype html>
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
-
-            <head>
-                <title>YouTube Connected</title>
-            </head>
-
-            <body>
 
             <h2>✅ تم ربط YouTube بنجاح</h2>
 
@@ -343,7 +295,6 @@ def oauth2callback(
                 🏠 العودة إلى Dashboard
             </a>
 
-            </body>
             </html>
             """
         )
@@ -351,8 +302,9 @@ def oauth2callback(
     except Exception as e:
 
         print(
-            "OAUTH CALLBACK ERROR:",
-            repr(e)
+            "[AUTH] CALLBACK ERROR:",
+            repr(e),
+            flush=True
         )
 
         return HTMLResponse(
@@ -364,14 +316,8 @@ def oauth2callback(
             <h2>❌ فشل ربط YouTube</h2>
 
             <p>
-            حدث خطأ أثناء إكمال المصادقة.
-            </p>
-
-            <p>
             {escape(str(e))}
             </p>
-
-            <br>
 
             <a href="/auth">
                 🔗 إعادة المحاولة
@@ -389,6 +335,11 @@ def oauth2callback(
 
 def autopilot_loop():
 
+    print(
+        "[AUTOPILOT] Loop started",
+        flush=True
+    )
+
     while True:
 
         try:
@@ -398,8 +349,9 @@ def autopilot_loop():
         except Exception as e:
 
             print(
-                "Autopilot ERROR:",
-                repr(e)
+                "[AUTOPILOT] ERROR:",
+                repr(e),
+                flush=True
             )
 
         time.sleep(3600)
@@ -568,7 +520,6 @@ def home():
         </tr>
         """
 
-
     autopilot_status = os.getenv(
         "AUTOPILOT",
         "false"
@@ -578,7 +529,6 @@ def home():
         "DAILY_JOB_LIMIT",
         "2"
     )
-
 
     return f"""
     <!doctype html>
@@ -689,25 +639,11 @@ def home():
 
         <tr>
 
-            <th>
-                ID
-            </th>
-
-            <th>
-                الموضوع
-            </th>
-
-            <th>
-                الحالة
-            </th>
-
-            <th>
-                العنوان
-            </th>
-
-            <th>
-                الإجراء
-            </th>
+            <th>ID</th>
+            <th>الموضوع</th>
+            <th>الحالة</th>
+            <th>العنوان</th>
+            <th>الإجراء</th>
 
         </tr>
 
@@ -731,9 +667,13 @@ def home():
 
 @app.post("/create")
 def create(
-    background_tasks: BackgroundTasks,
     topic: str = Form(...),
 ):
+
+    print(
+        f"[CREATE] Request received. Topic: {topic}",
+        flush=True
+    )
 
     jid = add_job(
         topic,
@@ -743,12 +683,40 @@ def create(
         ),
     )
 
-    if jid:
+    if not jid:
 
-        background_tasks.add_task(
-            run_job,
-            jid,
+        print(
+            "[CREATE] Job was not created "
+            "(possibly duplicate topic)",
+            flush=True
         )
+
+        return RedirectResponse(
+            "/",
+            status_code=303,
+        )
+
+    print(
+        f"[CREATE] Created job {jid}",
+        flush=True
+    )
+
+    # مهم:
+    # لا نستخدم FastAPI BackgroundTasks هنا.
+    # نشغل العامل في Thread مباشر مثل Autopilot.
+    thread = threading.Thread(
+        target=run_job,
+        args=(jid,),
+        daemon=True,
+        name=f"youtube-worker-{jid}",
+    )
+
+    thread.start()
+
+    print(
+        f"[CREATE] Started worker thread for job {jid}",
+        flush=True
+    )
 
     return RedirectResponse(
         "/",
@@ -764,6 +732,18 @@ def create(
 def enable_autopilot():
 
     os.environ["AUTOPILOT"] = "true"
+
+    print(
+        "[AUTOPILOT] Enabled from Dashboard",
+        flush=True
+    )
+
+    # تشغيل أول عملية فورًا بدل الانتظار ساعة
+    threading.Thread(
+        target=autopilot_once,
+        daemon=True,
+        name="autopilot-now",
+    ).start()
 
     return RedirectResponse(
         "/",
@@ -798,4 +778,4 @@ def publish(jid: int):
     return RedirectResponse(
         "/",
         status_code=303,
-    )
+)
