@@ -1,36 +1,74 @@
 import os
 import threading
 import time
+from html import escape
 
-from fastapi import FastAPI, Form, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import (
+    FastAPI,
+    Form,
+    BackgroundTasks,
+    Request,
+)
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+)
 from starlette.middleware.sessions import SessionMiddleware
 
 from dotenv import load_dotenv
 
-from db import *
-from worker import run_job, upload_job, publish_job, autopilot_once
-from youtube import authorization_url, finish_authorization
+from db import (
+    init,
+    jobs,
+    add_job,
+)
+
+from worker import (
+    run_job,
+    upload_job,
+    publish_job,
+    autopilot_once,
+)
+
+from youtube import (
+    authorization_url,
+    finish_authorization,
+)
 
 
 load_dotenv()
 
+
+# ============================================================
+# DATABASE
+# ============================================================
+
 init()
 
-app = FastAPI(title="YouTube AI Autonomous 24/7")
+
+# ============================================================
+# APP
+# ============================================================
+
+app = FastAPI(
+    title="YouTube AI Autonomous 24/7"
+)
 
 
 # ============================================================
-# SESSION / OAUTH
+# SESSION
 # ============================================================
 
-SESSION_SECRET = os.getenv("OAUTH_SESSION_SECRET")
+SESSION_SECRET = os.getenv(
+    "OAUTH_SESSION_SECRET"
+)
 
 if not SESSION_SECRET:
     raise RuntimeError(
         "OAUTH_SESSION_SECRET is missing. "
         "Add it in Render Environment Variables."
     )
+
 
 app.add_middleware(
     SessionMiddleware,
@@ -47,30 +85,131 @@ app.add_middleware(
 @app.get("/auth")
 def auth(request: Request):
 
-    # authorization_url now returns:
-    # url, state, code_verifier, nonce
+    try:
 
-    url, state, code_verifier, nonce = authorization_url()
+        result = authorization_url()
 
-    request.session["oauth_state"] = state
-    request.session["code_verifier"] = code_verifier
-    request.session["oauth_nonce"] = nonce
+        # youtube.py الجديد يعيد 3 قيم
+        # url, state, code_verifier
+        if len(result) != 3:
+            raise RuntimeError(
+                "authorization_url() returned an "
+                "unexpected number of values."
+            )
 
-    return RedirectResponse(url)
+        url, state, code_verifier = result
 
+        # نحتفظ بها أيضًا في Session
+        # للتوافق مع المتصفح.
+        request.session["oauth_state"] = state
+        request.session["code_verifier"] = code_verifier
+
+        return RedirectResponse(
+            url=url,
+            status_code=302,
+        )
+
+    except Exception as e:
+
+        print(
+            "AUTH START ERROR:",
+            repr(e)
+        )
+
+        return HTMLResponse(
+            f"""
+            <!doctype html>
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <h2>❌ فشل بدء ربط YouTube</h2>
+
+            <p>
+            {escape(str(e))}
+            </p>
+
+            <p>
+            تأكد من وجود client_secret.json
+            وإعدادات OAuth في Render.
+            </p>
+
+            <a href="/">
+                العودة إلى Dashboard
+            </a>
+
+            </html>
+            """,
+            status_code=500,
+        )
+
+
+# ============================================================
+# OAUTH CALLBACK
+# ============================================================
 
 @app.get("/oauth2callback")
 def oauth2callback(
     request: Request,
     code: str = "",
-    state: str = ""
+    state: str = "",
+    error: str = "",
 ):
 
-    saved_state = request.session.get("oauth_state")
-    code_verifier = request.session.get("code_verifier")
-    saved_nonce = request.session.get("oauth_nonce")
+    # --------------------------------------------------------
+    # Google returned an OAuth error
+    # --------------------------------------------------------
 
-    if not saved_state or not code_verifier:
+    if error:
+
+        print(
+            "GOOGLE OAUTH ERROR:",
+            error
+        )
+
+        return HTMLResponse(
+            f"""
+            <!doctype html>
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <h2>❌ ألغيت عملية ربط YouTube</h2>
+
+            <p>
+            Google OAuth:
+            {escape(error)}
+            </p>
+
+            <a href="/auth">
+                🔗 إعادة المحاولة
+            </a>
+
+            </html>
+            """,
+            status_code=400,
+        )
+
+
+    # --------------------------------------------------------
+    # Get values from browser session
+    # --------------------------------------------------------
+
+    saved_state = request.session.get(
+        "oauth_state"
+    )
+
+    code_verifier = request.session.get(
+        "code_verifier"
+    )
+
+
+    # --------------------------------------------------------
+    # Important:
+    # youtube.py also stores the pending OAuth data
+    # on the server. Therefore, the browser Session
+    # is not the only source.
+    # --------------------------------------------------------
+
+    if not state:
 
         return HTMLResponse(
             """
@@ -78,10 +217,10 @@ def oauth2callback(
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
 
-            <h2>❌ انتهت جلسة OAuth</h2>
+            <h2>❌ لم يتم استلام OAuth State</h2>
 
             <p>
-            افتح /auth وابدأ عملية الربط من جديد.
+            ابدأ عملية الربط من جديد.
             </p>
 
             <a href="/auth">
@@ -90,31 +229,9 @@ def oauth2callback(
 
             </html>
             """,
-            status_code=400
+            status_code=400,
         )
 
-    if state != saved_state:
-
-        return HTMLResponse(
-            """
-            <!doctype html>
-            <html lang="ar" dir="rtl">
-            <meta charset="utf-8">
-
-            <h2>❌ OAuth State غير صحيح</h2>
-
-            <p>
-            أعد عملية الربط من البداية.
-            </p>
-
-            <a href="/auth">
-                🔗 إعادة ربط YouTube
-            </a>
-
-            </html>
-            """,
-            status_code=400
-        )
 
     if not code:
 
@@ -126,27 +243,32 @@ def oauth2callback(
 
             <h2>❌ لم يتم استلام رمز Google</h2>
 
+            <p>
+            ابدأ عملية الربط من جديد.
+            </p>
+
             <a href="/auth">
                 🔗 إعادة المحاولة
             </a>
 
             </html>
             """,
-            status_code=400
+            status_code=400,
         )
 
-    try:
 
-        finish_authorization(
-            code,
-            state,
-            code_verifier,
-            nonce=saved_nonce
+    # --------------------------------------------------------
+    # If browser session exists, verify it.
+    #
+    # If it does not exist, youtube.py can still validate
+    # the pending OAuth transaction saved on the server.
+    # --------------------------------------------------------
+
+    if saved_state and saved_state != state:
+
+        print(
+            "OAUTH SESSION STATE MISMATCH"
         )
-
-        request.session.pop("oauth_state", None)
-        request.session.pop("code_verifier", None)
-        request.session.pop("oauth_nonce", None)
 
         return HTMLResponse(
             """
@@ -154,23 +276,84 @@ def oauth2callback(
             <html lang="ar" dir="rtl">
             <meta charset="utf-8">
 
+            <h2>❌ OAuth State غير صحيح</h2>
+
+            <p>
+            أعد عملية الربط من /auth.
+            </p>
+
+            <a href="/auth">
+                🔗 إعادة ربط YouTube
+            </a>
+
+            </html>
+            """,
+            status_code=400,
+        )
+
+
+    # --------------------------------------------------------
+    # Finish OAuth
+    # --------------------------------------------------------
+
+    try:
+
+        finish_authorization(
+            code=code,
+            state=state,
+            code_verifier=code_verifier,
+        )
+
+        # Clear browser session
+        request.session.pop(
+            "oauth_state",
+            None
+        )
+
+        request.session.pop(
+            "code_verifier",
+            None
+        )
+
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="ar" dir="rtl">
+            <meta charset="utf-8">
+
+            <head>
+                <title>YouTube Connected</title>
+            </head>
+
+            <body>
+
             <h2>✅ تم ربط YouTube بنجاح</h2>
 
             <p>
-            أصبح بإمكان الوكيل الوصول إلى قناة YouTube.
+            تم حفظ صلاحيات الحساب بنجاح.
             </p>
 
+            <p>
+            أصبح الوكيل قادرًا على استخدام قناة YouTube.
+            </p>
+
+            <br>
+
             <a href="/">
-                العودة إلى الوكيل
+                🏠 العودة إلى Dashboard
             </a>
 
+            </body>
             </html>
             """
         )
 
     except Exception as e:
 
-        print("OAuth ERROR:", repr(e))
+        print(
+            "OAUTH CALLBACK ERROR:",
+            repr(e)
+        )
 
         return HTMLResponse(
             f"""
@@ -185,16 +368,18 @@ def oauth2callback(
             </p>
 
             <p>
-            {str(e)}
+            {escape(str(e))}
             </p>
 
+            <br>
+
             <a href="/auth">
-                🔗 المحاولة مرة أخرى
+                🔗 إعادة المحاولة
             </a>
 
             </html>
             """,
-            status_code=500
+            status_code=500,
         )
 
 
@@ -222,7 +407,7 @@ def autopilot_loop():
 
 threading.Thread(
     target=autopilot_loop,
-    daemon=True
+    daemon=True,
 ).start()
 
 
@@ -232,7 +417,7 @@ threading.Thread(
 
 @app.get(
     "/setup",
-    response_class=HTMLResponse
+    response_class=HTMLResponse,
 )
 def setup():
 
@@ -268,16 +453,28 @@ def setup():
     <h3>المتطلبات</h3>
 
     <p>
-    يجب إضافة OPENAI_API_KEY في Render → Environment Variables.
+    يجب إضافة OPENAI_API_KEY في
+    Render → Environment Variables.
     </p>
 
     <p>
-    يجب إضافة OAUTH_SESSION_SECRET في Render → Environment Variables.
+    يجب إضافة OAUTH_SESSION_SECRET في
+    Render → Environment Variables.
     </p>
 
     <p>
-    يجب أن تكون إعدادات Google OAuth تحتوي على عنوان إعادة التوجيه الخاص بـ Render.
+    يجب إضافة client_secret.json في:
     </p>
+
+    <pre>/etc/secrets/client_secret.json</pre>
+
+    <p>
+    ويجب أن يكون OAUTH_REDIRECT_URI:
+    </p>
+
+    <pre>
+https://youtube-ai-agent-yich.onrender.com/oauth2callback
+    </pre>
 
     <br>
 
@@ -303,7 +500,7 @@ def setup():
 
 @app.get(
     "/",
-    response_class=HTMLResponse
+    response_class=HTMLResponse,
 )
 def home():
 
@@ -322,9 +519,11 @@ def home():
                 method="post"
                 action="/upload/{j['id']}"
             >
+
                 <button>
                     رفع Private
                 </button>
+
             </form>
             """
 
@@ -335,9 +534,11 @@ def home():
                 method="post"
                 action="/publish/{j['id']}"
             >
+
                 <button>
                     نشر Public
                 </button>
+
             </form>
             """
 
@@ -349,15 +550,15 @@ def home():
             </td>
 
             <td>
-                {j["topic"]}
+                {escape(str(j["topic"] or ""))}
             </td>
 
             <td>
-                {j["status"]}
+                {escape(str(j["status"] or ""))}
             </td>
 
             <td>
-                {j["title"] or ""}
+                {escape(str(j["title"] or ""))}
             </td>
 
             <td>
@@ -366,6 +567,7 @@ def home():
 
         </tr>
         """
+
 
     autopilot_status = os.getenv(
         "AUTOPILOT",
@@ -376,6 +578,7 @@ def home():
         "DAILY_JOB_LIMIT",
         "2"
     )
+
 
     return f"""
     <!doctype html>
@@ -423,12 +626,12 @@ def home():
 
     <p>
         Autopilot:
-        <b>{autopilot_status}</b>
+        <b>{escape(str(autopilot_status))}</b>
     </p>
 
     <p>
         الحد اليومي:
-        <b>{daily_limit}</b>
+        <b>{escape(str(daily_limit))}</b>
     </p>
 
     <p>
@@ -529,7 +732,7 @@ def home():
 @app.post("/create")
 def create(
     background_tasks: BackgroundTasks,
-    topic: str = Form(...)
+    topic: str = Form(...),
 ):
 
     jid = add_job(
@@ -537,19 +740,19 @@ def create(
         os.getenv(
             "DEFAULT_LANGUAGE",
             "ar"
-        )
+        ),
     )
 
     if jid:
 
         background_tasks.add_task(
             run_job,
-            jid
+            jid,
         )
 
     return RedirectResponse(
         "/",
-        status_code=303
+        status_code=303,
     )
 
 
@@ -564,7 +767,7 @@ def enable_autopilot():
 
     return RedirectResponse(
         "/",
-        status_code=303
+        status_code=303,
     )
 
 
@@ -579,7 +782,7 @@ def upload(jid: int):
 
     return RedirectResponse(
         "/",
-        status_code=303
+        status_code=303,
     )
 
 
@@ -594,5 +797,5 @@ def publish(jid: int):
 
     return RedirectResponse(
         "/",
-        status_code=303
+        status_code=303,
     )
