@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,7 @@ WIDTH = 1920
 HEIGHT = 1080
 FPS = 30
 
+# Target only. Actual duration follows the generated narration.
 TARGET_VIDEO_DURATION = 600.0
 
 DEFAULT_BG = (10, 16, 30)
@@ -35,6 +37,81 @@ MIN_SCENE_DURATION = 5.0
 MAX_SCENE_DURATION = 18.0
 
 MOTION_ZOOM = 0.065
+
+# Safety timeouts.
+TTS_TIMEOUT = int(os.getenv("TTS_TIMEOUT", "180"))
+FFMPEG_TIMEOUT = int(os.getenv("FFMPEG_TIMEOUT", "900"))
+FFPROBE_TIMEOUT = int(os.getenv("FFPROBE_TIMEOUT", "60"))
+
+VIDEO_PRESET = os.getenv(
+    "VIDEO_PRESET",
+    "veryfast"
+)
+
+VIDEO_CRF = os.getenv(
+    "VIDEO_CRF",
+    "21"
+)
+
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+def log(message):
+    print(
+        f"[MEDIA] {message}",
+        flush=True
+    )
+
+
+# ============================================================
+# COMMAND EXECUTION
+# ============================================================
+
+def run_command(
+    cmd,
+    timeout=None,
+    description="command"
+):
+    if timeout is None:
+        timeout = FFMPEG_TIMEOUT
+
+    log(
+        f"Running {description}..."
+    )
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{description} timed out after "
+            f"{timeout} seconds."
+        ) from exc
+
+    if result.returncode != 0:
+        stderr = (
+            result.stderr
+            or result.stdout
+            or "Unknown command error."
+        )
+
+        # Keep error useful but avoid gigantic logs.
+        stderr = stderr[-6000:]
+
+        raise RuntimeError(
+            f"{description} failed "
+            f"(exit code {result.returncode}):\n"
+            f"{stderr}"
+        )
+
+    return result
 
 
 # ============================================================
@@ -64,7 +141,10 @@ def get_font(size, bold=False):
     for path in candidates:
         if Path(path).exists():
             try:
-                return ImageFont.truetype(path, size)
+                return ImageFont.truetype(
+                    path,
+                    size
+                )
             except Exception:
                 pass
 
@@ -135,9 +215,12 @@ def fit_text(
     text = clean_text(text)
 
     if not text:
-        return "", get_font(
-            start_size,
-            bold
+        return (
+            "",
+            get_font(
+                start_size,
+                bold
+            )
         )
 
     size = start_size
@@ -152,7 +235,10 @@ def fit_text(
             text,
             max(
                 12,
-                int(max_width / max(1, size * 0.55))
+                int(
+                    max_width
+                    / max(1, size * 0.55)
+                )
             )
         )
 
@@ -164,14 +250,22 @@ def fit_text(
             align="center",
         )
 
-        width = bbox[2] - bbox[0]
-        height = bbox[3] - bbox[1]
+        width = (
+            bbox[2] - bbox[0]
+        )
+
+        height = (
+            bbox[3] - bbox[1]
+        )
 
         if (
             width <= max_width
             and height <= max_height
         ):
-            return wrapped, font
+            return (
+                wrapped,
+                font
+            )
 
         size -= 2
 
@@ -274,10 +368,14 @@ def generate_hashtags(
                 f"#{word}"
             )
 
-    tags.append("#FuturePulse")
+    tags.append(
+        "#FuturePulse"
+    )
 
     if language.startswith("ar"):
-        tags.append("#نبض_المستقبل")
+        tags.append(
+            "#نبض_المستقبل"
+        )
 
     result = []
 
@@ -291,7 +389,7 @@ def generate_hashtags(
 
 
 # ============================================================
-# CINEMATIC BACKGROUND
+# BACKGROUND
 # ============================================================
 
 def make_background(index):
@@ -310,7 +408,6 @@ def make_background(index):
         index % len(palettes)
     ]
 
-    # Create gradient efficiently.
     small = Image.new(
         "RGB",
         (1, HEIGHT),
@@ -320,22 +417,32 @@ def make_background(index):
     pixels = small.load()
 
     for y in range(HEIGHT):
-        ratio = y / max(
-            1,
-            HEIGHT - 1
+        ratio = (
+            y / max(
+                1,
+                HEIGHT - 1
+            )
         )
 
         pixels[0, y] = (
-            int(c1[0] * (1 - ratio) + c2[0] * ratio),
-            int(c1[1] * (1 - ratio) + c2[1] * ratio),
-            int(c1[2] * (1 - ratio) + c2[2] * ratio),
+            int(
+                c1[0] * (1 - ratio)
+                + c2[0] * ratio
+            ),
+            int(
+                c1[1] * (1 - ratio)
+                + c2[1] * ratio
+            ),
+            int(
+                c1[2] * (1 - ratio)
+                + c2[2] * ratio
+            ),
         )
 
     image = small.resize(
         (WIDTH, HEIGHT)
     )
 
-    # Cinematic light sources.
     overlay = Image.new(
         "RGBA",
         (WIDTH, HEIGHT),
@@ -378,16 +485,27 @@ def make_background(index):
             fill=color
         )
 
-    # Decorative circles.
     for n in range(10):
         x = (
             100
-            + ((index * 137 + n * 277) % (WIDTH - 200))
+            + (
+                (
+                    index * 137
+                    + n * 277
+                )
+                % (WIDTH - 200)
+            )
         )
 
         y = (
             80
-            + ((index * 71 + n * 149) % (HEIGHT - 160))
+            + (
+                (
+                    index * 71
+                    + n * 149
+                )
+                % (HEIGHT - 160)
+            )
         )
 
         radius = 2 + (n % 4)
@@ -520,7 +638,6 @@ def draw_card(
         overlay
     )
 
-    # Main safe-area panel.
     left = 110
     top = 100
     right = WIDTH - 110
@@ -547,10 +664,6 @@ def draw_card(
     draw = ImageDraw.Draw(
         image
     )
-
-    # --------------------------------------------------------
-    # Scene badge
-    # --------------------------------------------------------
 
     badge_font = get_font(
         27,
@@ -605,17 +718,9 @@ def draw_card(
         anchor="mm"
     )
 
-    # --------------------------------------------------------
-    # Title
-    # --------------------------------------------------------
-
-    title = clean_text(
-        title
-    )
-
     title_text, title_font = fit_text(
         draw,
-        title,
+        clean_text(title),
         max_width=WIDTH - 360,
         max_height=300,
         start_size=72,
@@ -635,17 +740,9 @@ def draw_card(
         anchor="mm"
     )
 
-    # --------------------------------------------------------
-    # Subtitle
-    # --------------------------------------------------------
-
-    subtitle = clean_text(
-        subtitle
-    )
-
     subtitle_text, subtitle_font = fit_text(
         draw,
-        subtitle,
+        clean_text(subtitle),
         max_width=WIDTH - 420,
         max_height=250,
         start_size=38,
@@ -665,12 +762,7 @@ def draw_card(
         anchor="mm"
     )
 
-    # --------------------------------------------------------
-    # Progress bar
-    # --------------------------------------------------------
-
     line_y = HEIGHT - 180
-
     line_left = 180
     line_right = WIDTH - 180
 
@@ -692,8 +784,9 @@ def draw_card(
 
     progress_right = int(
         line_left
-        + (line_right - line_left)
-        * progress
+        + (
+            line_right - line_left
+        ) * progress
     )
 
     draw.rounded_rectangle(
@@ -707,19 +800,13 @@ def draw_card(
         fill=ACCENT
     )
 
-    # --------------------------------------------------------
-    # Watermark
-    # --------------------------------------------------------
-
-    image = add_watermark(
+    return add_watermark(
         image
     )
 
-    return image
-
 
 # ============================================================
-# MOTION
+# MOTION FRAMES
 # ============================================================
 
 def create_motion_frames(
@@ -731,17 +818,13 @@ def create_motion_frames(
     """
     Compatibility function.
 
-    The new renderer does not create thousands of JPEG
-    frames anymore. It keeps the function for compatibility.
+    The actual renderer uses FFmpeg Ken Burns
+    motion directly and does not generate
+    thousands of JPEG frames.
     """
 
     out_dir = Path(
         out_dir
-    )
-
-    out_dir.mkdir(
-        parents=True,
-        exist_ok=True
     )
 
     frame_dir = (
@@ -791,13 +874,30 @@ async def tts(
             "صوت Edge TTS غير محدد."
         )
 
+    log(
+        f"Starting Edge TTS with voice: {voice}"
+    )
+
     communicator = edge_tts.Communicate(
         text,
         voice
     )
 
-    await communicator.save(
-        str(out)
+    try:
+        await asyncio.wait_for(
+            communicator.save(
+                str(out)
+            ),
+            timeout=TTS_TIMEOUT
+        )
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            "Edge TTS تجاوز المهلة "
+            f"({TTS_TIMEOUT} ثانية)."
+        ) from exc
+
+    log(
+        "Edge TTS completed."
     )
 
 
@@ -806,34 +906,43 @@ async def tts(
 # ============================================================
 
 def audio_duration(path):
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
+    path = Path(path)
+
+    if not path.exists():
+        raise RuntimeError(
+            f"ملف الصوت غير موجود: {path}"
         )
 
+    result = run_command(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        timeout=FFPROBE_TIMEOUT,
+        description="audio duration probe"
+    )
+
+    try:
         value = float(
             result.stdout.strip()
         )
+    except Exception as exc:
+        raise RuntimeError(
+            "تعذر قراءة مدة ملف الصوت."
+        ) from exc
 
-        if value > 0:
-            return value
+    if value <= 0:
+        raise RuntimeError(
+            "مدة ملف الصوت غير صالحة."
+        )
 
-    except Exception:
-        pass
-
-    return 30.0
+    return value
 
 
 # ============================================================
@@ -852,7 +961,6 @@ def normalize_scenes(
         list
     ):
         for scene in scenes:
-
             if not isinstance(
                 scene,
                 dict
@@ -888,9 +996,7 @@ def normalize_scenes(
                     }
                 )
 
-    # Split script if AI returned no scenes.
     if not result:
-
         paragraphs = [
             x.strip()
             for x in re.split(
@@ -935,7 +1041,6 @@ def calculate_durations(
     weights = []
 
     for scene in scenes:
-
         text = clean_text(
             scene.get(
                 "text",
@@ -952,7 +1057,8 @@ def calculate_durations(
 
         weight = max(
             20,
-            len(text) + len(visual) * 0.35
+            len(text)
+            + len(visual) * 0.35
         )
 
         weights.append(
@@ -966,7 +1072,6 @@ def calculate_durations(
     durations = []
 
     for weight in weights:
-
         value = (
             total_duration
             * weight
@@ -986,20 +1091,7 @@ def calculate_durations(
             )
         )
 
-    # Redistribute difference so total duration remains close
-    # to the narration length.
-    current = sum(
-        durations
-    )
-
-    if current <= 0:
-        return [
-            total_duration / len(scenes)
-            for _ in scenes
-        ]
-
-    for _ in range(8):
-
+    for _ in range(12):
         difference = (
             total_duration
             - sum(durations)
@@ -1080,14 +1172,6 @@ def render_scene(
         float(duration)
     )
 
-    frames = max(
-        1,
-        int(
-            duration * FPS
-        )
-    )
-
-    # Efficient Ken Burns motion directly in FFmpeg.
     zoom_expression = (
         "min(zoom+0.0007,1.10)"
     )
@@ -1114,7 +1198,7 @@ def render_scene(
         f"z='{zoom_expression}':"
         f"x='{x_expression}':"
         f"y='{y_expression}':"
-        f"d=1:"
+        "d=1:"
         f"s={WIDTH}x{HEIGHT}:"
         f"fps={FPS},"
         "format=yuv420p"
@@ -1123,6 +1207,9 @@ def render_scene(
     cmd = [
         "ffmpeg",
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-loop",
         "1",
         "-i",
@@ -1135,9 +1222,9 @@ def render_scene(
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        VIDEO_PRESET,
         "-crf",
-        "21",
+        VIDEO_CRF,
         "-pix_fmt",
         "yuv420p",
         "-movflags",
@@ -1145,12 +1232,17 @@ def render_scene(
         str(output),
     ]
 
-    subprocess.run(
+    run_command(
         cmd,
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        timeout=FFMPEG_TIMEOUT,
+        description=f"render scene {index + 1}"
     )
+
+    if not output.exists():
+        raise RuntimeError(
+            f"FFmpeg لم ينشئ المشهد "
+            f"{index + 1}."
+        )
 
     return output
 
@@ -1166,6 +1258,11 @@ def concat_scenes(
     output = Path(
         output
     )
+
+    if not scene_files:
+        raise RuntimeError(
+            "لا توجد مشاهد للدمج."
+        )
 
     concat_file = (
         output.parent
@@ -1201,9 +1298,15 @@ def concat_scenes(
     if silent_video.exists():
         silent_video.unlink()
 
+    # Keep the safe re-encode here.
+    # We can optimize this later after stability
+    # is confirmed.
     cmd = [
         "ffmpeg",
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-f",
         "concat",
         "-safe",
@@ -1213,9 +1316,9 @@ def concat_scenes(
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        VIDEO_PRESET,
         "-crf",
-        "21",
+        VIDEO_CRF,
         "-pix_fmt",
         "yuv420p",
         "-movflags",
@@ -1223,12 +1326,16 @@ def concat_scenes(
         str(silent_video),
     ]
 
-    subprocess.run(
+    run_command(
         cmd,
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        timeout=FFMPEG_TIMEOUT,
+        description="concatenate scenes"
     )
+
+    if not silent_video.exists():
+        raise RuntimeError(
+            "فشل إنشاء الفيديو الصامت."
+        )
 
     return silent_video
 
@@ -1245,6 +1352,9 @@ def add_audio(
     cmd = [
         "ffmpeg",
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-i",
         str(video),
         "-i",
@@ -1265,11 +1375,66 @@ def add_audio(
         str(output),
     ]
 
-    subprocess.run(
+    run_command(
         cmd,
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        timeout=FFMPEG_TIMEOUT,
+        description="add narration audio"
+    )
+
+    if not Path(output).exists():
+        raise RuntimeError(
+            "فشل إنشاء الفيديو مع الصوت."
+        )
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+def validate_video(path):
+    path = Path(path)
+
+    if not path.exists():
+        raise RuntimeError(
+            f"الفيديو غير موجود: {path}"
+        )
+
+    result = run_command(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-show_entries",
+            "stream=codec_type,codec_name,width,height,r_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1",
+            str(path),
+        ],
+        timeout=FFPROBE_TIMEOUT,
+        description="final video validation"
+    )
+
+    output = (
+        result.stdout
+        or ""
+    )
+
+    if "codec_type=video" not in output:
+        raise RuntimeError(
+            "الفيديو النهائي لا يحتوي "
+            "على مسار فيديو صالح."
+        )
+
+    if "codec_type=audio" not in output:
+        raise RuntimeError(
+            "الفيديو النهائي لا يحتوي "
+            "على مسار صوت صالح."
+        )
+
+    log(
+        "Final video validation passed."
     )
 
 
@@ -1396,14 +1561,52 @@ def make_video(
         / "rendered_scenes"
     )
 
-    # Remove old files.
+    log(
+        "=================================================="
+    )
+
+    log(
+        f"Starting video generation: {title}"
+    )
+
+    log(
+        f"Output directory: {out}"
+    )
+
+    log(
+        f"Resolution: {WIDTH}x{HEIGHT}"
+    )
+
+    log(
+        f"FPS: {FPS}"
+    )
+
+    # --------------------------------------------------------
+    # Clean old output
+    # --------------------------------------------------------
+
     for path in [
         video,
         audio,
         thumbnail,
     ]:
         if path.exists():
-            path.unlink()
+            try:
+                path.unlink()
+            except Exception as exc:
+                log(
+                    f"Warning: could not remove {path}: {exc}"
+                )
+
+    if scene_dir.exists():
+        try:
+            shutil.rmtree(
+                scene_dir
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "تعذر تنظيف مجلد المشاهد القديم."
+            ) from exc
 
     language = detect_language(
         script
@@ -1429,19 +1632,21 @@ def make_video(
         language
     )
 
-    print(
-        f"[MEDIA] Language: {language}",
-        flush=True
+    log(
+        f"Language: {language}"
     )
 
-    print(
-        f"[MEDIA] Hashtags: {hashtags}",
-        flush=True
+    log(
+        f"Hashtags: {hashtags}"
     )
 
     # --------------------------------------------------------
     # TTS
     # --------------------------------------------------------
+
+    log(
+        "STEP 1/6: Generating narration..."
+    )
 
     asyncio.run(
         tts(
@@ -1465,15 +1670,18 @@ def make_video(
         total_duration
     )
 
-    print(
-        f"[MEDIA] Narration duration: "
-        f"{total_duration:.2f}s",
-        flush=True
+    log(
+        f"Narration duration: "
+        f"{total_duration:.2f} seconds"
     )
 
     # --------------------------------------------------------
     # Scenes
     # --------------------------------------------------------
+
+    log(
+        "STEP 2/6: Preparing scenes..."
+    )
 
     normalized = normalize_scenes(
         title,
@@ -1495,14 +1703,21 @@ def make_video(
         normalized
     )
 
-    print(
-        f"[MEDIA] Scenes: {total_scenes}",
-        flush=True
+    log(
+        f"Total scenes: {total_scenes}"
     )
 
     scene_dir.mkdir(
         parents=True,
         exist_ok=True
+    )
+
+    # --------------------------------------------------------
+    # Render scenes
+    # --------------------------------------------------------
+
+    log(
+        "STEP 3/6: Rendering scenes..."
     )
 
     scene_files = []
@@ -1516,6 +1731,13 @@ def make_video(
             or title
         )
 
+        duration = durations[index]
+
+        log(
+            f"Scene {index + 1}/{total_scenes} "
+            f"- duration {duration:.2f}s"
+        )
+
         image = draw_card(
             title,
             visual,
@@ -1527,16 +1749,21 @@ def make_video(
             image,
             scene_dir,
             index,
-            durations[index]
+            duration
         )
 
         if not scene_file.exists():
             raise RuntimeError(
-                f"فشل إنشاء المشهد {index + 1}."
+                f"فشل إنشاء المشهد "
+                f"{index + 1}."
             )
 
         scene_files.append(
             scene_file
+        )
+
+        log(
+            f"Scene {index + 1}/{total_scenes} completed."
         )
 
     if not scene_files:
@@ -1548,6 +1775,10 @@ def make_video(
     # Concatenate
     # --------------------------------------------------------
 
+    log(
+        "STEP 4/6: Concatenating scenes..."
+    )
+
     silent_video = concat_scenes(
         scene_files,
         video
@@ -1558,9 +1789,17 @@ def make_video(
             "فشل دمج مشاهد الفيديو."
         )
 
+    log(
+        "Scene concatenation completed."
+    )
+
     # --------------------------------------------------------
     # Audio
     # --------------------------------------------------------
+
+    log(
+        "STEP 5/6: Adding narration..."
+    )
 
     add_audio(
         silent_video,
@@ -1573,37 +1812,29 @@ def make_video(
             "فشل إنشاء الفيديو النهائي."
         )
 
+    log(
+        "Narration added successfully."
+    )
+
     # --------------------------------------------------------
     # Validate
     # --------------------------------------------------------
 
-    try:
-        subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name,width,height,r_frame_rate",
-                "-of",
-                "default=noprint_wrappers=1",
-                str(video),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+    log(
+        "STEP 6/6: Validating final video..."
+    )
 
-    except Exception as exc:
-        raise RuntimeError(
-            f"ملف الفيديو النهائي غير صالح: {exc}"
-        )
+    validate_video(
+        video
+    )
 
     # --------------------------------------------------------
     # Thumbnail
     # --------------------------------------------------------
+
+    log(
+        "Creating thumbnail..."
+    )
 
     make_thumbnail(
         title,
@@ -1637,19 +1868,28 @@ def make_video(
         encoding="utf-8"
     )
 
-    print(
-        "[MEDIA] Video generation completed successfully",
-        flush=True
+    log(
+        "=================================================="
     )
 
-    print(
-        f"[MEDIA] Video: {video}",
-        flush=True
+    log(
+        "Video generation completed successfully."
     )
 
-    print(
-        f"[MEDIA] Thumbnail: {thumbnail}",
-        flush=True
+    log(
+        f"Video: {video}"
+    )
+
+    log(
+        f"Thumbnail: {thumbnail}"
+    )
+
+    log(
+        f"Duration: {total_duration:.2f}s"
+    )
+
+    log(
+        "=================================================="
     )
 
     return (
