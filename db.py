@@ -124,7 +124,6 @@ def init():
 
         return
 
-
     # --------------------------------------------------------
     # SQLite
     # --------------------------------------------------------
@@ -215,7 +214,6 @@ def set_setting(k, v):
 
         return
 
-
     # --------------------------------------------------------
     # SQLite
     # --------------------------------------------------------
@@ -249,42 +247,43 @@ def add_job(topic, language):
     Returns None if the topic already exists.
     """
 
-    try:
+    if USE_POSTGRES:
 
         with conn() as c:
 
-            if USE_POSTGRES:
+            row = c.execute(
+                """
+                INSERT INTO jobs(
+                    topic,
+                    language,
+                    status
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT(topic)
+                DO NOTHING
+                RETURNING id
+                """,
+                (
+                    topic,
+                    language,
+                    "queued",
+                ),
+            ).fetchone()
 
-                row = c.execute(
-                    """
-                    INSERT INTO jobs(
-                        topic,
-                        language,
-                        status
-                    )
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT(topic)
-                    DO NOTHING
-                    RETURNING id
-                    """,
-                    (
-                        topic,
-                        language,
-                        "queued",
-                    ),
-                ).fetchone()
+            c.commit()
 
-                c.commit()
+            if not row:
+                return None
 
-                if not row:
-                    return None
+            return row["id"]
 
-                return row["id"]
+    # --------------------------------------------------------
+    # SQLite
+    # --------------------------------------------------------
 
+    try:
 
-            # ------------------------------------------------
-            # SQLite
-            # ------------------------------------------------
+        with conn() as c:
 
             row = c.execute(
                 """
@@ -306,24 +305,8 @@ def add_job(topic, language):
 
             return row.lastrowid
 
-    except (sqlite3.IntegrityError, Exception) as exc:
-
-        # PostgreSQL duplicate-topic protection.
-        # We do not hide unrelated database errors.
-        if USE_POSTGRES:
-
-            error_text = str(exc).lower()
-
-            if (
-                "unique" in error_text
-                or "duplicate" in error_text
-            ):
-                return None
-
-        if isinstance(exc, sqlite3.IntegrityError):
-            return None
-
-        raise
+    except sqlite3.IntegrityError:
+        return None
 
 
 # ============================================================
@@ -357,7 +340,6 @@ def update_job(i, **kw):
     if not kw:
         return
 
-
     if USE_POSTGRES:
 
         assignments = ", ".join(
@@ -382,7 +364,6 @@ def update_job(i, **kw):
             c.commit()
 
         return
-
 
     # --------------------------------------------------------
     # SQLite
