@@ -21,6 +21,32 @@ ACCENT = (55, 130, 255)
 TEXT_COLOR = (255, 255, 255)
 MUTED = (205, 215, 230)
 
+# ============================================================
+# BRANDING
+# ============================================================
+
+BRAND_NAME = "نبض المستقبل | Future Pulse 🚀"
+
+WATERMARK_TEXT = BRAND_NAME
+
+# حجم العلامة المائية
+WATERMARK_FONT_SIZE = 24
+
+# شفافية العلامة المائية
+WATERMARK_ALPHA = 150
+
+# مكان العلامة المائية
+WATERMARK_MARGIN = 28
+
+# ============================================================
+# VIDEO SETTINGS
+# ============================================================
+
+MAX_SCENES = 8
+MIN_SCENE_DURATION = 3.0
+
+# سرعة حركة الخلفية
+MOTION_ZOOM = 0.045
 
 # ============================================================
 # FONT
@@ -28,12 +54,22 @@ MUTED = (205, 215, 230)
 
 def get_font(size):
     candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        # Arabic fonts first
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+
+        # Common Linux fonts
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+
+        # Other possible fonts
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+
+        # Windows
         "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+
+        # macOS
         "/System/Library/Fonts/Supplemental/Arial.ttf",
     ]
 
@@ -63,9 +99,7 @@ def wrap(text, width=34):
     current = ""
 
     for word in words:
-        candidate = (
-            f"{current} {word}".strip()
-        )
+        candidate = f"{current} {word}".strip()
 
         if len(candidate) > width and current:
             lines.append(current)
@@ -98,13 +132,190 @@ def clean_text(text):
 
 
 # ============================================================
+# LANGUAGE
+# ============================================================
+
+def detect_language(text):
+    """
+    Detect the main language.
+
+    The project is configured to use one language only.
+    DEFAULT_LANGUAGE can be set in Render.
+    """
+
+    configured = os.getenv(
+        "DEFAULT_LANGUAGE",
+        "ar"
+    ).strip().lower()
+
+    if configured:
+        return configured
+
+    return "ar"
+
+
+# ============================================================
+# HASHTAGS
+# ============================================================
+
+def generate_hashtags(
+    title,
+    script,
+    language="ar"
+):
+    """
+    Generate automatic hashtags.
+
+    Hashtags are generated from the title and script.
+    """
+
+    text = clean_text(
+        f"{title} {script}"
+    )
+
+    if not text:
+        return "#FuturePulse"
+
+    words = re.findall(
+        r"[\w\u0600-\u06FF]+",
+        text,
+        flags=re.UNICODE
+    )
+
+    stopwords_ar = {
+        "من",
+        "في",
+        "على",
+        "إلى",
+        "عن",
+        "مع",
+        "هذا",
+        "هذه",
+        "ذلك",
+        "التي",
+        "الذي",
+        "هو",
+        "هي",
+        "و",
+        "أو",
+        "أن",
+        "إن",
+        "كان",
+        "كانت",
+        "ما",
+        "ماذا",
+        "كيف",
+        "لماذا",
+        "لقد",
+        "قد",
+        "بعد",
+        "قبل",
+        "بين",
+        "هناك",
+        "كل",
+        "أي",
+        "كما",
+        "ثم",
+        "لكن",
+        "عندما",
+        "حتى",
+        "لذلك",
+        "فقط",
+    }
+
+    stopwords_en = {
+        "the",
+        "and",
+        "or",
+        "of",
+        "to",
+        "in",
+        "on",
+        "for",
+        "with",
+        "this",
+        "that",
+        "from",
+        "how",
+        "why",
+        "what",
+        "when",
+        "where",
+        "is",
+        "are",
+        "was",
+        "were",
+        "a",
+        "an",
+    }
+
+    stopwords = (
+        stopwords_ar
+        if language.startswith("ar")
+        else stopwords_en
+    )
+
+    unique = []
+
+    for word in words:
+
+        word = word.strip()
+
+        if not word:
+            continue
+
+        if len(word) < 3:
+            continue
+
+        if word.lower() in stopwords:
+            continue
+
+        if word not in unique:
+            unique.append(word)
+
+        if len(unique) >= 6:
+            break
+
+    hashtags = []
+
+    for word in unique:
+        clean_word = re.sub(
+            r"[^\w\u0600-\u06FF]",
+            "",
+            word,
+            flags=re.UNICODE
+        )
+
+        if clean_word:
+            hashtags.append(
+                f"#{clean_word}"
+            )
+
+    # Always include branding.
+    hashtags.append("#FuturePulse")
+
+    if language.startswith("ar"):
+        hashtags.append("#نبض_المستقبل")
+
+    # Remove duplicates.
+    result = []
+
+    for tag in hashtags:
+        if tag not in result:
+            result.append(tag)
+
+    return " ".join(result[:8])
+
+
+# ============================================================
 # BACKGROUND
 # ============================================================
 
 def make_background(index):
     """
-    Creates a visible cinematic background instead of the
-    black Image.new() used by the old version.
+    Create a visible cinematic background.
+
+    This replaces the old plain/black background.
     """
 
     palettes = [
@@ -118,7 +329,9 @@ def make_background(index):
         ((25, 38, 22), (80, 105, 45)),
     ]
 
-    c1, c2 = palettes[index % len(palettes)]
+    c1, c2 = palettes[
+        index % len(palettes)
+    ]
 
     image = Image.new(
         "RGB",
@@ -129,7 +342,14 @@ def make_background(index):
     pixels = image.load()
 
     for y in range(HEIGHT):
-        ratio = y / max(1, HEIGHT - 1)
+
+        ratio = (
+            y
+            / max(
+                1,
+                HEIGHT - 1
+            )
+        )
 
         r = int(
             c1[0] * (1 - ratio)
@@ -147,24 +367,50 @@ def make_background(index):
         )
 
         for x in range(WIDTH):
-            pixels[x, y] = (r, g, b)
 
-    # Soft blurred light circles
+            pixels[x, y] = (
+                r,
+                g,
+                b
+            )
+
+    # --------------------------------------------------------
+    # Soft cinematic lights
+    # --------------------------------------------------------
+
     overlay = Image.new(
         "RGBA",
         (WIDTH, HEIGHT),
         (0, 0, 0, 0)
     )
 
-    od = ImageDraw.Draw(overlay)
+    od = ImageDraw.Draw(
+        overlay
+    )
 
     circles = [
-        (120, 130, 230, (255, 255, 255, 22)),
-        (1050, 180, 300, (255, 255, 255, 255)),
-        (850, 650, 260, (255, 255, 255, 18)),
+        (
+            120,
+            130,
+            230,
+            (255, 255, 255, 22)
+        ),
+        (
+            1050,
+            180,
+            300,
+            (255, 255, 255, 25)
+        ),
+        (
+            850,
+            650,
+            260,
+            (255, 255, 255, 18)
+        ),
     ]
 
     for x, y, radius, color in circles:
+
         od.ellipse(
             (
                 x - radius,
@@ -188,6 +434,104 @@ def make_background(index):
 
 
 # ============================================================
+# WATERMARK
+# ============================================================
+
+def add_watermark(
+    image,
+    text=WATERMARK_TEXT
+):
+    """
+    Add Future Pulse watermark.
+    """
+
+    image = image.convert(
+        "RGBA"
+    )
+
+    overlay = Image.new(
+        "RGBA",
+        image.size,
+        (0, 0, 0, 0)
+    )
+
+    draw = ImageDraw.Draw(
+        overlay
+    )
+
+    font = get_font(
+        WATERMARK_FONT_SIZE
+    )
+
+    bbox = draw.textbbox(
+        (0, 0),
+        text,
+        font=font
+    )
+
+    text_width = (
+        bbox[2] - bbox[0]
+    )
+
+    text_height = (
+        bbox[3] - bbox[1]
+    )
+
+    x = (
+        WIDTH
+        - text_width
+        - WATERMARK_MARGIN
+    )
+
+    y = (
+        HEIGHT
+        - text_height
+        - WATERMARK_MARGIN
+    )
+
+    # Background behind watermark.
+    padding_x = 12
+    padding_y = 8
+
+    draw.rounded_rectangle(
+        (
+            x - padding_x,
+            y - padding_y,
+            x + text_width + padding_x,
+            y + text_height + padding_y,
+        ),
+        radius=12,
+        fill=(
+            0,
+            0,
+            0,
+            85
+        )
+    )
+
+    draw.text(
+        (x, y),
+        text,
+        font=font,
+        fill=(
+            255,
+            255,
+            255,
+            WATERMARK_ALPHA
+        )
+    )
+
+    image = Image.alpha_composite(
+        image,
+        overlay
+    )
+
+    return image.convert(
+        "RGB"
+    )
+
+
+# ============================================================
 # CARD FRAME
 # ============================================================
 
@@ -197,18 +541,23 @@ def draw_card(
     index,
     total
 ):
-    image = make_background(index)
+    image = make_background(
+        index
+    )
 
-    draw = ImageDraw.Draw(image)
+    # --------------------------------------------------------
+    # Main panel
+    # --------------------------------------------------------
 
-    # Dark transparent area behind text
     panel = Image.new(
         "RGBA",
         (WIDTH, HEIGHT),
         (0, 0, 0, 0)
     )
 
-    pd = ImageDraw.Draw(panel)
+    pd = ImageDraw.Draw(
+        panel
+    )
 
     pd.rounded_rectangle(
         (
@@ -218,8 +567,18 @@ def draw_card(
             HEIGHT - 80
         ),
         radius=35,
-        fill=(0, 0, 0, 115),
-        outline=(255, 255, 255, 35),
+        fill=(
+            0,
+            0,
+            0,
+            115
+        ),
+        outline=(
+            255,
+            255,
+            255,
+            35
+        ),
         width=2
     )
 
@@ -228,28 +587,54 @@ def draw_card(
         panel
     ).convert("RGB")
 
-    draw = ImageDraw.Draw(image)
+    draw = ImageDraw.Draw(
+        image
+    )
 
+    # --------------------------------------------------------
     # Scene number
-    number_font = get_font(28)
+    # --------------------------------------------------------
+
+    number_font = get_font(
+        28
+    )
 
     draw.rounded_rectangle(
-        (85, 105, 245, 155),
+        (
+            85,
+            105,
+            245,
+            155
+        ),
         radius=20,
         fill=ACCENT
     )
 
+    scene_text = (
+        f"المشهد {index + 1}/{total}"
+    )
+
     draw.text(
-        (110, 117),
-        f"المشهد {index + 1}/{total}",
+        (
+            110,
+            117
+        ),
+        scene_text,
         font=number_font,
         fill=TEXT_COLOR
     )
 
+    # --------------------------------------------------------
     # Main title
-    title_font = get_font(58)
+    # --------------------------------------------------------
 
-    title = clean_text(title)
+    title_font = get_font(
+        58
+    )
+
+    title = clean_text(
+        title
+    )
 
     title_text = wrap(
         title,
@@ -257,7 +642,10 @@ def draw_card(
     )
 
     draw.multiline_text(
-        (85, 205),
+        (
+            85,
+            205
+        ),
         title_text,
         font=title_font,
         fill=TEXT_COLOR,
@@ -266,10 +654,17 @@ def draw_card(
         anchor="ra"
     )
 
-    # Subtitle
-    subtitle = clean_text(subtitle)
+    # --------------------------------------------------------
+    # Subtitle / visual description
+    # --------------------------------------------------------
 
-    subtitle_font = get_font(34)
+    subtitle = clean_text(
+        subtitle
+    )
+
+    subtitle_font = get_font(
+        34
+    )
 
     subtitle_text = wrap(
         subtitle,
@@ -277,7 +672,10 @@ def draw_card(
     )
 
     draw.multiline_text(
-        (85, 490),
+        (
+            85,
+            490
+        ),
         subtitle_text,
         font=subtitle_font,
         fill=MUTED,
@@ -286,7 +684,10 @@ def draw_card(
         anchor="ra"
     )
 
-    # Decorative timeline
+    # --------------------------------------------------------
+    # Timeline
+    # --------------------------------------------------------
+
     line_y = HEIGHT - 115
 
     draw.rounded_rectangle(
@@ -297,12 +698,20 @@ def draw_card(
             line_y + 8
         ),
         radius=4,
-        fill=(255, 255, 255, 55)
+        fill=(
+            255,
+            255,
+            255,
+            55
+        )
     )
 
     progress = (
         (index + 1)
-        / max(1, total)
+        / max(
+            1,
+            total
+        )
     )
 
     draw.rounded_rectangle(
@@ -311,13 +720,23 @@ def draw_card(
             line_y,
             int(
                 85
-                + (WIDTH - 170)
+                + (
+                    WIDTH - 170
+                )
                 * progress
             ),
             line_y + 8
         ),
         radius=4,
         fill=ACCENT
+    )
+
+    # --------------------------------------------------------
+    # Branding watermark
+    # --------------------------------------------------------
+
+    image = add_watermark(
+        image
     )
 
     return image
@@ -334,11 +753,12 @@ def create_motion_frames(
     duration
 ):
     """
-    Creates a short MP4 with smooth zoom/pan movement
-    so the video is not a static image.
+    Create moving cinematic frames.
     """
 
-    out_dir = Path(out_dir)
+    out_dir = Path(
+        out_dir
+    )
 
     out_dir.mkdir(
         parents=True,
@@ -356,7 +776,7 @@ def create_motion_frames(
     )
 
     total_frames = max(
-        FPS * duration,
+        int(FPS * duration),
         FPS * 3
     )
 
@@ -365,6 +785,7 @@ def create_motion_frames(
     for frame_number in range(
         total_frames
     ):
+
         progress = (
             frame_number
             / max(
@@ -373,10 +794,10 @@ def create_motion_frames(
             )
         )
 
-        # Smooth zoom
+        # Smooth zoom.
         zoom = (
             1.00
-            + 0.045 * progress
+            + MOTION_ZOOM * progress
         )
 
         crop_w = int(
@@ -387,12 +808,24 @@ def create_motion_frames(
             HEIGHT / zoom
         )
 
-        # Gentle horizontal movement
-        max_x = WIDTH - crop_w
-        max_y = HEIGHT - crop_h
+        max_x = max(
+            0,
+            WIDTH - crop_w
+        )
+
+        max_y = max(
+            0,
+            HEIGHT - crop_h
+        )
 
         x = int(
             max_x * progress
+        )
+
+        direction = (
+            1
+            if scene_index % 2
+            else -1
         )
 
         y = int(
@@ -400,11 +833,7 @@ def create_motion_frames(
             * (
                 0.5
                 + 0.15
-                * (
-                    1
-                    if scene_index % 2
-                    else -1
-                )
+                * direction
                 * progress
             )
         )
@@ -453,7 +882,9 @@ def create_motion_frames(
             quality=94
         )
 
-        generated.append(path)
+        generated.append(
+            path
+        )
 
     return generated
 
@@ -467,6 +898,27 @@ async def tts(
     voice,
     out
 ):
+    """
+    Generate one continuous voice track.
+
+    The complete script is converted into one audio file,
+    keeping the narration connected.
+    """
+
+    text = clean_text(
+        text
+    )
+
+    if not text:
+        raise RuntimeError(
+            "لا يوجد نص لإنشاء الصوت."
+        )
+
+    if not voice:
+        raise RuntimeError(
+            "صوت Edge TTS غير محدد."
+        )
+
     communicator = edge_tts.Communicate(
         text,
         voice
@@ -481,8 +933,11 @@ async def tts(
 # AUDIO DURATION
 # ============================================================
 
-def audio_duration(path):
+def audio_duration(
+    path
+):
     try:
+
         result = subprocess.run(
             [
                 "ffprobe",
@@ -527,7 +982,9 @@ def normalize_scenes(
         scenes,
         list
     ):
+
         for scene in scenes:
+
             if not isinstance(
                 scene,
                 dict
@@ -549,18 +1006,27 @@ def normalize_scenes(
             )
 
             if text or visual:
+
                 result.append(
                     {
-                        "text": text
-                        or title,
-                        "visual": visual
-                        or text
-                        or title,
+                        "text": (
+                            text
+                            or title
+                        ),
+                        "visual": (
+                            visual
+                            or text
+                            or title
+                        ),
                     }
                 )
 
-    # Never allow zero scenes.
+    # --------------------------------------------------------
+    # Fallback: split connected script into scenes.
+    # --------------------------------------------------------
+
     if not result:
+
         paragraphs = [
             x.strip()
             for x in re.split(
@@ -570,7 +1036,8 @@ def normalize_scenes(
             if x.strip()
         ]
 
-        for paragraph in paragraphs[:8]:
+        for paragraph in paragraphs[:MAX_SCENES]:
+
             result.append(
                 {
                     "text": paragraph[:300],
@@ -578,16 +1045,22 @@ def normalize_scenes(
                 }
             )
 
-    # Final fallback
+    # --------------------------------------------------------
+    # Final fallback.
+    # --------------------------------------------------------
+
     if not result:
+
         result = [
             {
                 "text": title,
-                "visual": title
+                "visual": title,
             }
         ]
 
-    return result[:8]
+    return result[
+        :MAX_SCENES
+    ]
 
 
 # ============================================================
@@ -601,10 +1074,17 @@ def calculate_durations(
     weights = []
 
     for scene in scenes:
+
         text = (
-            scene.get("text", "")
+            scene.get(
+                "text",
+                ""
+            )
             + " "
-            + scene.get("visual", "")
+            + scene.get(
+                "visual",
+                ""
+            )
         )
 
         weight = max(
@@ -620,11 +1100,10 @@ def calculate_durations(
         weights
     )
 
-    minimum = 3.0
-
     durations = []
 
     for weight in weights:
+
         value = (
             total_duration
             * weight
@@ -636,17 +1115,17 @@ def calculate_durations(
 
         durations.append(
             max(
-                minimum,
+                MIN_SCENE_DURATION,
                 value
             )
         )
 
-    # Keep total close to audio duration.
     current = sum(
         durations
     )
 
     if current > 0:
+
         factor = (
             total_duration
             / current
@@ -673,7 +1152,7 @@ def render_scene(
     index,
     duration
 ):
-    frames = create_motion_frames(
+    create_motion_frames(
         image,
         scene_dir,
         index,
@@ -685,13 +1164,6 @@ def render_scene(
         )
     )
 
-    frames_txt = (
-        Path(scene_dir)
-        / f"scene_{index}.txt"
-    )
-
-    # Use image2 instead of concat to avoid
-    # malformed concat timing.
     pattern = (
         Path(scene_dir)
         / f"frames_{index}"
@@ -755,6 +1227,7 @@ def concat_scenes(
     lines = []
 
     for scene in scene_files:
+
         lines.append(
             f"file '{Path(scene).resolve()}'"
         )
@@ -847,10 +1320,6 @@ def make_thumbnail(
         0
     )
 
-    draw = ImageDraw.Draw(
-        image
-    )
-
     overlay = Image.new(
         "RGBA",
         image.size,
@@ -888,6 +1357,33 @@ def make_thumbnail(
         align="center"
     )
 
+    # Branding on thumbnail.
+    brand_font = get_font(
+        28
+    )
+
+    bbox = draw.textbbox(
+        (0, 0),
+        BRAND_NAME,
+        font=brand_font
+    )
+
+    brand_width = (
+        bbox[2] - bbox[0]
+    )
+
+    draw.text(
+        (
+            WIDTH
+            - brand_width
+            - 30,
+            HEIGHT - 55
+        ),
+        BRAND_NAME,
+        font=brand_font,
+        fill=TEXT_COLOR
+    )
+
     image.save(
         str(path),
         "JPEG",
@@ -906,6 +1402,20 @@ def make_video(
     outdir,
     voice
 ):
+    """
+    Main video generator.
+
+    Features:
+        - Visible cinematic backgrounds
+        - Moving scenes
+        - One continuous narration
+        - Automatic branding
+        - Automatic watermark
+        - Automatic hashtags
+        - YouTube-compatible MP4
+        - Thumbnail generation
+    """
+
     out = Path(
         outdir
     )
@@ -916,13 +1426,17 @@ def make_video(
     )
 
     # --------------------------------------------------------
-    # Clean previous incomplete output
+    # Output files
     # --------------------------------------------------------
 
     video = out / "video.mp4"
     audio = out / "voice.mp3"
     thumbnail = out / "thumbnail.jpg"
     scene_dir = out / "rendered_scenes"
+
+    # --------------------------------------------------------
+    # Clean previous output
+    # --------------------------------------------------------
 
     if video.exists():
         video.unlink()
@@ -931,18 +1445,62 @@ def make_video(
         audio.unlink()
 
     # --------------------------------------------------------
+    # Language
+    # --------------------------------------------------------
+
+    language = detect_language(
+        script
+    )
+
+    # --------------------------------------------------------
+    # Clean script
+    # --------------------------------------------------------
+
+    final_script = clean_text(
+        script or title
+    )
+
+    if not final_script:
+        final_script = clean_text(
+            title
+        )
+
+    # --------------------------------------------------------
+    # Generate automatic hashtags.
+    #
+    # Worker can also use these if needed.
+    # --------------------------------------------------------
+
+    hashtags = generate_hashtags(
+        title,
+        final_script,
+        language
+    )
+
+    print(
+        f"[MEDIA] Language: {language}",
+        flush=True
+    )
+
+    print(
+        f"[MEDIA] Hashtags: {hashtags}",
+        flush=True
+    )
+
+    # --------------------------------------------------------
     # TTS
     # --------------------------------------------------------
 
     asyncio.run(
         tts(
-            str(script or title),
+            final_script,
             voice,
             audio
         )
     )
 
     if not audio.exists():
+
         raise RuntimeError(
             "فشل إنشاء ملف الصوت."
         )
@@ -966,7 +1524,7 @@ def make_video(
 
     normalized = normalize_scenes(
         title,
-        script,
+        final_script,
         scenes
     )
 
@@ -976,7 +1534,7 @@ def make_video(
     )
 
     # --------------------------------------------------------
-    # Render every scene
+    # Render scenes
     # --------------------------------------------------------
 
     scene_dir.mkdir(
@@ -993,6 +1551,7 @@ def make_video(
     for index, scene in enumerate(
         normalized
     ):
+
         image = draw_card(
             title,
             scene.get(
@@ -1014,6 +1573,7 @@ def make_video(
         )
 
         if not scene_file.exists():
+
             raise RuntimeError(
                 f"فشل إنشاء المشهد {index + 1}."
             )
@@ -1023,12 +1583,13 @@ def make_video(
         )
 
     if not scene_files:
+
         raise RuntimeError(
             "لم يتم إنشاء أي مشهد للفيديو."
         )
 
     # --------------------------------------------------------
-    # Concatenate
+    # Concatenate scenes
     # --------------------------------------------------------
 
     silent_video = concat_scenes(
@@ -1037,12 +1598,13 @@ def make_video(
     )
 
     if not silent_video.exists():
+
         raise RuntimeError(
             "فشل دمج مشاهد الفيديو."
         )
 
     # --------------------------------------------------------
-    # Add voice
+    # Add continuous voice
     # --------------------------------------------------------
 
     add_audio(
@@ -1052,6 +1614,7 @@ def make_video(
     )
 
     if not video.exists():
+
         raise RuntimeError(
             "فشل إنشاء الفيديو النهائي."
         )
@@ -1061,6 +1624,7 @@ def make_video(
     # --------------------------------------------------------
 
     try:
+
         subprocess.run(
             [
                 "ffprobe",
@@ -1079,9 +1643,10 @@ def make_video(
             stderr=subprocess.DEVNULL
         )
 
-    except Exception as e:
+    except Exception as exc:
+
         raise RuntimeError(
-            f"ملف الفيديو النهائي غير صالح: {e}"
+            f"ملف الفيديو النهائي غير صالح: {exc}"
         )
 
     # --------------------------------------------------------
@@ -1091,6 +1656,43 @@ def make_video(
     make_thumbnail(
         title,
         thumbnail
+    )
+
+    if not thumbnail.exists():
+
+        raise RuntimeError(
+            "فشل إنشاء الصورة المصغرة."
+        )
+
+    # --------------------------------------------------------
+    # Save metadata for worker / future use.
+    # --------------------------------------------------------
+
+    metadata = out / "metadata.txt"
+
+    metadata.write_text(
+        (
+            f"brand={BRAND_NAME}\n"
+            f"language={language}\n"
+            f"hashtags={hashtags}\n"
+            f"title={clean_text(title)}\n"
+        ),
+        encoding="utf-8"
+    )
+
+    print(
+        "[MEDIA] Video generation completed successfully",
+        flush=True
+    )
+
+    print(
+        f"[MEDIA] Video: {video}",
+        flush=True
+    )
+
+    print(
+        f"[MEDIA] Thumbnail: {thumbnail}",
+        flush=True
     )
 
     return (
