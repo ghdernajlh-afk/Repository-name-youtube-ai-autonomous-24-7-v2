@@ -13,10 +13,12 @@ except Exception:
 # CONFIG
 # ============================================================
 
+# يمكن تغيير النموذج من Render Environment Variables
+# بدون تعديل الكود.
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
-    "gemini-2.5-flash-lite"
-)
+    "gemini-3.5-flash-lite"
+).strip()
 
 
 # ============================================================
@@ -29,6 +31,7 @@ def clean_json(text):
 
     text = text.strip()
 
+    # إزالة Markdown code fences
     text = re.sub(
         r"^```(?:json)?\s*",
         "",
@@ -42,13 +45,19 @@ def clean_json(text):
         text
     )
 
+    # استخراج JSON من أي نص إضافي
     start = text.find("{")
     end = text.rfind("}")
 
     if start >= 0 and end > start:
         text = text[start:end + 1]
 
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"Invalid JSON returned by Gemini: {e}"
+        ) from e
 
 
 def gemini_client():
@@ -75,6 +84,11 @@ def ask_gemini(prompt):
 
     if client is None:
         return None
+
+    if not GEMINI_MODEL:
+        raise RuntimeError(
+            "GEMINI_MODEL is empty."
+        )
 
     response = client.models.generate_content(
         model=GEMINI_MODEL,
@@ -248,7 +262,7 @@ def local_content(
         )
 
     script = f"""
-مرحبًا بكم في قناة اليوم.
+مرحبًا بكم في قناة نبض المستقبل.
 
 موضوعنا اليوم هو:
 {topic}
@@ -276,9 +290,10 @@ def local_content(
 وفي النهاية، هذه كانت أهم النقاط حول:
 {topic}
 
-إذا أعجبكم الفيديو، تابعوا القناة للمزيد
-من المواضيع التقنية والعلمية والمعلومات
-المثيرة للاهتمام.
+إذا أعجبكم الفيديو، تابعوا قناة
+نبض المستقبل | Future Pulse 🚀
+للمزيد من المواضيع التقنية والعلمية
+والمعلومات المثيرة للاهتمام.
 
 شكرًا لكم على المشاهدة.
 """.strip()
@@ -313,7 +328,8 @@ def local_content(
     description = (
         f"في هذا الفيديو نستعرض موضوع: {topic}\n\n"
         "تم إعداد المحتوى اعتمادًا على المصادر "
-        "المتاحة وقت إنشاء الفيديو."
+        "المتاحة وقت إنشاء الفيديو.\n\n"
+        "© نبض المستقبل | Future Pulse 🚀"
     )
 
     tags = [
@@ -326,7 +342,7 @@ def local_content(
     ]
 
     return {
-        "title": title[:100],
+        "title": topic[:100],
         "description": description,
         "script": script,
         "scenes": scenes,
@@ -341,19 +357,23 @@ def local_content(
 def choose(items, recent):
 
     prompt = f"""
-أنت مدير قناة YouTube عربية.
+أنت مدير قناة YouTube عربية اسمها:
+نبض المستقبل | Future Pulse 🚀
 
 اختر فكرة واحدة فقط من المصادر التالية.
 
 الشروط:
 - اختر موضوعًا جذابًا ومفيدًا.
+- اختر موضوعًا واحدًا فقط.
+- لا تخلط بين عدة مواضيع.
 - لا تختار موضوعًا مكررًا.
-- لا تختلق أخبارًا.
-- اعتمد على المعلومات الموجودة.
+- لا تختلق أخبارًا أو معلومات.
+- اعتمد على المعلومات الموجودة في المصادر.
 - أعد JSON فقط.
+- لا تضف أي نص خارج JSON.
 
 المواضيع السابقة:
-{recent}
+{json.dumps(recent or [], ensure_ascii=False)}
 
 المصادر:
 {json.dumps(items[:40], ensure_ascii=False)}
@@ -364,7 +384,10 @@ def choose(items, recent):
         result = ask_gemini(prompt)
 
         if result:
-            return clean_json(result)
+            data = clean_json(result)
+
+            if data.get("topic"):
+                return data
 
     except Exception as e:
 
@@ -391,34 +414,46 @@ def make_content(
 ):
 
     prompt = f"""
-أنت منتج YouTube محترف.
+أنت منتج YouTube محترف لقناة:
 
-الموضوع:
+نبض المستقبل | Future Pulse 🚀
+
+الموضوع الوحيد للفيديو:
 {topic}
 
-اللغة:
+اللغة المطلوبة:
 {language}
 
 المصادر:
 {json.dumps(sources, ensure_ascii=False)[:16000]}
 
-أنشئ محتوى أصليًا.
+أنشئ محتوى أصليًا ومترابطًا حول الموضوع
+المحدد فقط.
 
-لا تنسخ النصوص من المصادر.
+قواعد مهمة جدًا:
+- استخدم لغة واحدة فقط طوال الفيديو.
+- إذا كانت اللغة ar فاكتب السيناريو بالعربية فقط.
+- لا تخلط العربية والإنجليزية أو أي لغة أخرى
+  داخل السيناريو.
+- لا تنتقل إلى موضوع مختلف.
+- اجعل جميع المشاهد مرتبطة بالموضوع الرئيسي.
+- لا تنسخ النصوص من المصادر.
+- لا تقدم ادعاءً كحقيقة إذا لم تدعمه المصادر.
+- لا تختلق معلومات.
+- اجعل المشاهد مناسبة لما يقال في السيناريو.
+- أعد JSON فقط.
+- لا تضف Markdown أو شرحًا خارج JSON.
 
-لا تقدم ادعاءً كحقيقة إذا لم تدعمه
-المصادر.
-
-أعد JSON فقط بالشكل التالي:
+أعد JSON بهذا الشكل:
 
 {{
   "title": "عنوان جذاب وغير مضلل",
   "description": "وصف الفيديو",
-  "script": "سكربت عربي",
+  "script": "سكربت مترابط باللغة المطلوبة",
   "scenes": [
     {{
-      "text": "جملة قصيرة",
-      "visual": "وصف بصري"
+      "text": "جملة قصيرة مرتبطة بالموضوع",
+      "visual": "وصف بصري واضح ومحدد للمشهد"
     }}
   ],
   "tags": [
@@ -438,10 +473,64 @@ def make_content(
                 result
             )
 
-            if (
-                data.get("title")
-                and data.get("script")
-            ):
+            title = str(
+                data.get("title", "")
+            ).strip()
+
+            script = str(
+                data.get("script", "")
+            ).strip()
+
+            scenes = data.get(
+                "scenes",
+                []
+            )
+
+            tags = data.get(
+                "tags",
+                []
+            )
+
+            description = str(
+                data.get("description", "")
+            ).strip()
+
+            if title and script:
+
+                # ضمان أن البيانات الأساسية صحيحة
+                if not isinstance(scenes, list):
+                    scenes = []
+
+                if not isinstance(tags, list):
+                    tags = []
+
+                # تنظيف الوسوم
+                clean_tags = []
+
+                for tag in tags:
+                    tag = str(tag).strip()
+
+                    if tag and tag not in clean_tags:
+                        clean_tags.append(tag)
+
+                # حقوق القناة في الوصف
+                copyright_line = (
+                    "\n\n© نبض المستقبل | "
+                    "Future Pulse 🚀"
+                )
+
+                if (
+                    "نبض المستقبل" not in description
+                    and "Future Pulse" not in description
+                ):
+                    description += copyright_line
+
+                data["title"] = title[:100]
+                data["description"] = description
+                data["script"] = script
+                data["scenes"] = scenes
+                data["tags"] = clean_tags[:30]
+
                 return data
 
     except Exception as e:
