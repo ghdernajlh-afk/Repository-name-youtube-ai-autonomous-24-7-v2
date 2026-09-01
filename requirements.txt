@@ -14,3 +14,4 @@ jinja2
 python-multipart
 pydantic
 itsdangerous
+psycopg[binary]
