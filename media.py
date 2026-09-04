@@ -40,6 +40,10 @@ MOTION_ZOOM = 0.065
 
 # Safety timeouts.
 TTS_TIMEOUT = int(os.getenv("TTS_TIMEOUT", "180"))
+
+# Number of automatic Edge TTS retries.
+TTS_RETRIES = int(os.getenv("TTS_RETRIES", "3"))
+
 FFMPEG_TIMEOUT = int(os.getenv("FFMPEG_TIMEOUT", "900"))
 FFPROBE_TIMEOUT = int(os.getenv("FFPROBE_TIMEOUT", "60"))
 
@@ -102,7 +106,6 @@ def run_command(
             or "Unknown command error."
         )
 
-        # Keep error useful but avoid gigantic logs.
         stderr = stderr[-6000:]
 
         raise RuntimeError(
@@ -852,7 +855,7 @@ def create_motion_frames(
 
 
 # ============================================================
-# TTS
+# TTS - IMPROVED
 # ============================================================
 
 async def tts(
@@ -874,30 +877,116 @@ async def tts(
             "صوت Edge TTS غير محدد."
         )
 
-    log(
-        f"Starting Edge TTS with voice: {voice}"
+    last_error = None
+
+    retries = max(
+        1,
+        TTS_RETRIES
     )
 
-    communicator = edge_tts.Communicate(
-        text,
-        voice
-    )
+    for attempt in range(
+        1,
+        retries + 1
+    ):
+        try:
+            log(
+                f"Starting Edge TTS attempt "
+                f"{attempt}/{retries} "
+                f"with voice: {voice}"
+            )
 
-    try:
-        await asyncio.wait_for(
-            communicator.save(
-                str(out)
-            ),
-            timeout=TTS_TIMEOUT
-        )
-    except asyncio.TimeoutError as exc:
-        raise RuntimeError(
-            "Edge TTS تجاوز المهلة "
-            f"({TTS_TIMEOUT} ثانية)."
-        ) from exc
+            out_path = Path(
+                out
+            )
 
-    log(
-        "Edge TTS completed."
+            out_path.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
+            # Remove incomplete/old audio file.
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                    log(
+                        "Removed old/incomplete TTS file."
+                    )
+                except Exception as exc:
+                    log(
+                        f"Warning: could not remove "
+                        f"old TTS file: {exc}"
+                    )
+
+            communicator = edge_tts.Communicate(
+                text,
+                voice
+            )
+
+            await asyncio.wait_for(
+                communicator.save(
+                    str(out_path)
+                ),
+                timeout=TTS_TIMEOUT
+            )
+
+            # Verify that Edge TTS actually created
+            # a usable audio file.
+            if not out_path.exists():
+                raise RuntimeError(
+                    "Edge TTS لم ينشئ ملف الصوت."
+                )
+
+            file_size = out_path.stat().st_size
+
+            if file_size < 1000:
+                raise RuntimeError(
+                    "ملف الصوت الناتج غير صالح "
+                    f"(الحجم {file_size} بايت)."
+                )
+
+            log(
+                f"Edge TTS completed successfully "
+                f"on attempt {attempt}."
+            )
+
+            return
+
+        except asyncio.TimeoutError:
+            last_error = RuntimeError(
+                "Edge TTS timeout on attempt "
+                f"{attempt}/{retries} "
+                f"after {TTS_TIMEOUT} seconds."
+            )
+
+            log(
+                str(last_error)
+            )
+
+        except Exception as exc:
+            last_error = exc
+
+            log(
+                f"Edge TTS attempt "
+                f"{attempt}/{retries} failed: "
+                f"{exc}"
+            )
+
+        if attempt < retries:
+            delay = 5 * attempt
+
+            log(
+                f"Waiting {delay} seconds before "
+                f"next TTS attempt..."
+            )
+
+            await asyncio.sleep(
+                delay
+            )
+
+    raise RuntimeError(
+        "فشل Edge TTS بعد "
+        f"{retries} محاولات: "
+        f"{last_error}"
     )
 
 
@@ -1298,9 +1387,6 @@ def concat_scenes(
     if silent_video.exists():
         silent_video.unlink()
 
-    # Keep the safe re-encode here.
-    # We can optimize this later after stability
-    # is confirmed.
     cmd = [
         "ffmpeg",
         "-y",
