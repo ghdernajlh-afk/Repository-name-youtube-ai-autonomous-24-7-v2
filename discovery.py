@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 # RSS SOURCES
 # ============================================================
 
-# مصادر موثوقة ومستقرة
 BACKUP_FEEDS = [
     "https://feeds.bbci.co.uk/news/technology/rss.xml",
     "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
@@ -19,8 +18,8 @@ BACKUP_FEEDS = [
     "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",
 ]
 
-# Google News يسبب أحيانًا HTTP 503 على خوادم Render.
-# يبقى اختياريًا ويمكن تفعيله من Environment Variables.
+# Google News may sometimes return HTTP 503 on Render.
+# It is optional and disabled by default.
 GOOGLE_NEWS_FEEDS = [
     "https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en",
     "https://news.google.com/rss/search?q=technology&hl=en-US&gl=US&ceid=US:en",
@@ -42,9 +41,7 @@ def get_feeds():
     )
 
     if enable_google:
-        feeds.extend(
-            GOOGLE_NEWS_FEEDS
-        )
+        feeds.extend(GOOGLE_NEWS_FEEDS)
 
     return feeds
 
@@ -64,6 +61,17 @@ USER_AGENT = (
     "Chrome/120.0 Safari/537.36 "
     "YouTubeAI/2.0"
 )
+
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+def log(message):
+    print(
+        f"[DISCOVERY] {message}",
+        flush=True
+    )
 
 
 # ============================================================
@@ -93,6 +101,7 @@ def http_get(url, timeout=20, retries=2):
             )
 
             response.raise_for_status()
+
             return response
 
         except Exception as e:
@@ -111,17 +120,6 @@ def http_get(url, timeout=20, retries=2):
         raise last_error
 
     return None
-
-
-# ============================================================
-# LOGGING
-# ============================================================
-
-def log(message):
-    print(
-        f"[DISCOVERY] {message}",
-        flush=True
-    )
 
 
 # ============================================================
@@ -225,6 +223,7 @@ def discover():
                 successful_feeds += 1
 
             for entry in entries[:per_feed]:
+
                 title = clean_text(
                     entry.get(
                         "title",
@@ -282,6 +281,7 @@ def discover():
     seen_titles = set()
 
     for item in out:
+
         link = (
             item.get("link") or ""
         ).strip()
