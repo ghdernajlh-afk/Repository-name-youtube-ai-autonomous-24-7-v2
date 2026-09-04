@@ -303,4 +303,94 @@ def discover():
             continue
 
         seen_links.add(link_key)
-       
+        seen_titles.add(title_key)
+
+        unique.append(item)
+
+    log(
+        f"Discovery completed: "
+        f"{len(unique)} unique sources "
+        f"from {successful_feeds} successful feeds"
+    )
+
+    if not unique:
+        log(
+            "WARNING: All RSS feeds returned "
+            "zero usable sources."
+        )
+
+        return []
+
+    return unique
+
+
+# ============================================================
+# SOURCE TEXT
+# ============================================================
+
+def source_text(url):
+    if not url:
+        return ""
+
+    try:
+        log(
+            f"Fetching source: "
+            f"{url[:150]}"
+        )
+
+        response = http_get(
+            url,
+            timeout=15,
+            retries=2
+        )
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        for element in soup(
+            [
+                "script",
+                "style",
+                "noscript",
+                "svg",
+                "nav",
+                "footer",
+                "header",
+                "form",
+                "iframe",
+                "aside",
+            ]
+        ):
+            element.decompose()
+
+        article = soup.find(
+            "article"
+        )
+
+        if article:
+            text = " ".join(
+                article.stripped_strings
+            )
+        else:
+            text = " ".join(
+                soup.stripped_strings
+            )
+
+        text = clean_text(text)
+
+        log(
+            f"Source fetched: "
+            f"{len(text)} characters"
+        )
+
+        return text[:7000]
+
+    except Exception as e:
+        log(
+            f"Source ERROR: "
+            f"{repr(e)}"
+        )
+
+        return ""
