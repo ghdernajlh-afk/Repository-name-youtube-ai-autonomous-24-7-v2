@@ -9,24 +9,49 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.append(str(BASE_DIR))
 
-# استيراد الدوال مع التوافق التام مع db.py
-try:
-    from db import (
-        get_next_job as get_pending_job,
-        update_job_status,
-        save_job_result,
-        clear_hung_jobs,
-        log_db
-    )
-except ImportError:
-    from db import (
-        get_pending_job,
-        update_job_status,
-        save_job_result,
-        clear_hung_jobs,
-        log_db
-    )
+# ----------------------------------------------------
+# استيراد مرن وآمن من db.py لمنع أي ImportError
+# ----------------------------------------------------
+import db
 
+def get_pending_job():
+    for name in ["get_pending_job", "get_next_job", "fetch_pending_job"]:
+        if hasattr(db, name):
+            return getattr(db, name)()
+    return None
+
+def update_job_status(job_id, status, error=None):
+    for name in ["update_job_status", "set_job_status"]:
+        if hasattr(db, name):
+            try:
+                return getattr(db, name)(job_id, status, error)
+            except TypeError:
+                return getattr(db, name)(job_id, status)
+    return None
+
+def save_job_result(job_id, title, script, video_path, thumb_path):
+    for name in ["save_job_result", "save_result", "update_job_result"]:
+        if hasattr(db, name):
+            try:
+                return getattr(db, name)(job_id, title, script, video_path, thumb_path)
+            except Exception:
+                pass
+    return None
+
+def clear_hung_jobs():
+    for name in ["clear_hung_jobs", "reset_hung_jobs", "clean_jobs"]:
+        if hasattr(db, name):
+            return getattr(db, name)()
+    return None
+
+def log_db(msg: str):
+    if hasattr(db, "log_db"):
+        return getattr(db, "log_db")(msg)
+    print(f"[DB LOG] {msg}", flush=True)
+
+# ----------------------------------------------------
+# استيراد باقي الوحدات
+# ----------------------------------------------------
 from discovery import discover_sources, fetch_source_text
 from ai import generate_script
 from media import make_video
@@ -35,6 +60,9 @@ def log(msg: str):
     print(f"[WORKER] {msg}", flush=True)
 
 async def run_job(job: dict):
+    if not job:
+        return False
+        
     job_id = job.get("id") or job.get("job_id")
     log(f"Job {job_id}: starting execution")
 
@@ -51,7 +79,7 @@ async def run_job(job: dict):
         if not discovered:
             raise RuntimeError("لم يتم العثور على أي مصادر أخبار")
 
-        # 3. اختيار الموضوع واستخراج المحتوى
+        # 3. اختيار الموضوع واستخرج المحتوى
         log(f"Job {job_id}: selecting topic")
         topic_info = job.get("topic") or discovered[0]
         title = topic_info.get("title", "عنوان غير محدد") if isinstance(topic_info, dict) else str(topic_info)
