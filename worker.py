@@ -14,11 +14,13 @@ sys.path.append(str(BASE_DIR))
 # ----------------------------------------------------
 import db
 
+
 def get_pending_job():
     for name in ["get_pending_job", "get_next_job", "fetch_pending_job"]:
         if hasattr(db, name):
             return getattr(db, name)()
     return None
+
 
 def update_job_status(job_id, status, error=None):
     for name in ["update_job_status", "set_job_status"]:
@@ -29,14 +31,22 @@ def update_job_status(job_id, status, error=None):
                 return getattr(db, name)(job_id, status)
     return None
 
+
 def save_job_result(job_id, title, script, video_path, thumb_path):
     for name in ["save_job_result", "save_result", "update_job_result"]:
         if hasattr(db, name):
             try:
-                return getattr(db, name)(job_id, title, script, video_path, thumb_path)
+                return getattr(db, name)(
+                    job_id,
+                    title,
+                    script,
+                    video_path,
+                    thumb_path,
+                )
             except Exception:
                 pass
     return None
+
 
 def clear_hung_jobs():
     for name in ["clear_hung_jobs", "reset_hung_jobs", "clean_jobs"]:
@@ -44,191 +54,596 @@ def clear_hung_jobs():
             return getattr(db, name)()
     return None
 
+
 def log_db(msg: str):
     if hasattr(db, "log_db"):
         return getattr(db, "log_db")(msg)
+
     print(f"[DB LOG] {msg}", flush=True)
+
 
 # ----------------------------------------------------
 # 2. استيراد مرن وآمن من discovery.py
 # ----------------------------------------------------
 import discovery
 
+
 async def discover_sources(feeds):
-    for name in ["discover_sources", "fetch_feeds", "get_sources", "discover"]:
+    for name in [
+        "discover_sources",
+        "fetch_feeds",
+        "get_sources",
+        "discover",
+    ]:
         if hasattr(discovery, name):
             func = getattr(discovery, name)
+
             if asyncio.iscoroutinefunction(func):
                 return await func(feeds)
+
             return func(feeds)
-    return [{"title": "خبر جديد", "link": feeds[0] if feeds else ""}]
+
+    return [
+        {
+            "title": "خبر جديد",
+            "link": feeds[0] if feeds else "",
+        }
+    ]
+
 
 async def fetch_source_text(url):
-    for name in ["fetch_source_text", "get_page_text", "fetch_text", "extract_text"]:
+    for name in [
+        "fetch_source_text",
+        "get_page_text",
+        "fetch_text",
+        "extract_text",
+    ]:
         if hasattr(discovery, name):
             func = getattr(discovery, name)
+
             if asyncio.iscoroutinefunction(func):
                 return await func(url)
+
             return func(url)
+
     return ""
 
+
 # ----------------------------------------------------
-# 3. استيراد مرن وآمن من ai.py و media.py
+# 3. استيراد AI و Media و YouTube
 # ----------------------------------------------------
 import ai
+
 from media import make_video
+from youtube import upload_private
+
 
 async def generate_script(title, sources_content):
-    for name in ["generate_script", "create_script", "make_script"]:
+    for name in [
+        "generate_script",
+        "create_script",
+        "make_script",
+    ]:
         if hasattr(ai, name):
             func = getattr(ai, name)
+
             if asyncio.iscoroutinefunction(func):
-                return await func(title, sources_content)
-            return func(title, sources_content)
-    return {"title": title, "items": [{"title": title, "text": title}]}
+                return await func(
+                    title,
+                    sources_content,
+                )
+
+            return func(
+                title,
+                sources_content,
+            )
+
+    return {
+        "title": title,
+        "items": [
+            {
+                "title": title,
+                "text": title,
+            }
+        ],
+    }
+
 
 def log(msg: str):
-    print(f"[WORKER] {msg}", flush=True)
+    print(
+        f"[WORKER] {msg}",
+        flush=True,
+    )
+
 
 # ----------------------------------------------------
-# 4. تنفيذ المهمة (Job Execution)
+# 4. تنفيذ المهمة
 # ----------------------------------------------------
 
 async def run_job(job: dict):
+
     if not job:
         return False
-        
-    job_id = job.get("id") or job.get("job_id")
-    log(f"Job {job_id}: starting execution")
+
+    job_id = (
+        job.get("id")
+        or job.get("job_id")
+    )
+
+    log(
+        f"Job {job_id}: starting execution"
+    )
 
     try:
-        # 1. تحديث الحالة
-        update_job_status(job_id, "in_progress")
 
+        # ----------------------------------------------------
+        # 1. تحديث حالة المهمة
+        # ----------------------------------------------------
+
+        update_job_status(
+            job_id,
+            "in_progress",
+        )
+
+        # ----------------------------------------------------
         # 2. اكتشاف المصادر
+        # ----------------------------------------------------
+
         feeds = job.get("feeds") or []
-        log(f"Job {job_id}: discovering sources...")
-        discovered = await discover_sources(feeds)
-        log(f"Job {job_id}: discovered {len(discovered)} sources")
+
+        log(
+            f"Job {job_id}: discovering sources..."
+        )
+
+        discovered = await discover_sources(
+            feeds
+        )
+
+        log(
+            f"Job {job_id}: discovered "
+            f"{len(discovered)} sources"
+        )
 
         if not discovered:
-            raise RuntimeError("لم يتم العثور على أي مصادر أخبار")
+            raise RuntimeError(
+                "لم يتم العثور على أي مصادر أخبار"
+            )
 
+        # ----------------------------------------------------
         # 3. اختيار الموضوع واستخراج المحتوى
-        log(f"Job {job_id}: selecting topic")
-        topic_info = job.get("topic") or discovered[0]
-        title = topic_info.get("title", "عنوان غير محدد") if isinstance(topic_info, dict) else str(topic_info)
-        urls = topic_info.get("urls", [topic_info.get("link")]) if isinstance(topic_info, dict) else [str(topic_info)]
-        
-        urls = [u for u in urls if u]
-        log(f"Job {job_id}: selected topic: {title}")
+        # ----------------------------------------------------
+
+        log(
+            f"Job {job_id}: selecting topic"
+        )
+
+        topic_info = (
+            job.get("topic")
+            or discovered[0]
+        )
+
+        if isinstance(topic_info, dict):
+
+            title = topic_info.get(
+                "title",
+                "عنوان غير محدد",
+            )
+
+            urls = topic_info.get(
+                "urls",
+                [
+                    topic_info.get("link")
+                ],
+            )
+
+        else:
+
+            title = str(topic_info)
+
+            urls = [
+                str(topic_info)
+            ]
+
+        urls = [
+            url
+            for url in urls
+            if url
+        ]
+
+        log(
+            f"Job {job_id}: selected topic: "
+            f"{title}"
+        )
 
         sources_content = []
-        max_sources = min(3, len(urls))
-        for idx, url in enumerate(urls[:max_sources]):
+
+        max_sources = min(
+            3,
+            len(urls),
+        )
+
+        for idx, url in enumerate(
+            urls[:max_sources]
+        ):
+
             try:
+
                 t0 = time.time()
-                text = await fetch_source_text(url)
-                dt = round(time.time() - t0, 2)
+
+                text = await fetch_source_text(
+                    url
+                )
+
+                dt = round(
+                    time.time() - t0,
+                    2,
+                )
+
                 if text:
-                    sources_content.append({"url": url, "text": text})
-                    log(f"Job {job_id}: source {idx+1} OK ({dt}s)")
+
+                    sources_content.append(
+                        {
+                            "url": url,
+                            "text": text,
+                        }
+                    )
+
+                    log(
+                        f"Job {job_id}: source "
+                        f"{idx + 1} OK ({dt}s)"
+                    )
+
             except Exception as e:
-                log(f"Job {job_id}: source {idx+1} failed: {e}")
+
+                log(
+                    f"Job {job_id}: source "
+                    f"{idx + 1} failed: {e}"
+                )
+
+        # إذا لم يتم استخراج نصوص
+        # نستخدم العنوان كحل احتياطي
 
         if not sources_content:
-            sources_content = [{"url": urls[0] if urls else "", "text": title}]
 
-        # 4. الكتابة بالذكاء الاصطناعي
-        log(f"Job {job_id}: starting AI writing")
-        script_data = await generate_script(title, sources_content)
-        log(f"Job {job_id}: AI content ready")
+            sources_content = [
+                {
+                    "url": (
+                        urls[0]
+                        if urls
+                        else ""
+                    ),
+                    "text": title,
+                }
+            ]
 
-        script_items = script_data.get("items") or script_data.get("sections") or []
+        # ----------------------------------------------------
+        # 4. إنشاء المحتوى بالذكاء الاصطناعي
+        # ----------------------------------------------------
+
+        log(
+            f"Job {job_id}: starting AI writing"
+        )
+
+        script_data = await generate_script(
+            title,
+            sources_content,
+        )
+
+        log(
+            f"Job {job_id}: AI content ready"
+        )
+
+        # حماية في حال لم يعد AI dict
+        if not isinstance(
+            script_data,
+            dict,
+        ):
+
+            script_data = {
+                "title": title,
+                "full_text": str(
+                    script_data
+                ),
+            }
+
+        script_items = (
+            script_data.get("items")
+            or script_data.get("sections")
+            or []
+        )
+
         if not script_items:
-            script_items = [{"title": title, "text": script_data.get("full_text", title)}]
 
+            script_items = [
+                {
+                    "title": title,
+                    "text": script_data.get(
+                        "full_text",
+                        title,
+                    ),
+                }
+            ]
+
+        # ----------------------------------------------------
         # 5. إنشاء الفيديو والصورة المصغرة
-        log(f"Job {job_id}: generating video")
+        # ----------------------------------------------------
+
+        log(
+            f"Job {job_id}: generating video"
+        )
+
         video_path, thumb_path = await make_video(
             str(job_id),
             title,
-            script_items
+            script_items,
         )
 
-        log(f"Job {job_id}: video generated successfully at {video_path}")
+        if not video_path:
+            raise RuntimeError(
+                "فشل إنشاء الفيديو: video_path فارغ"
+            )
 
-        # 6. حفظ النتيجة
+        log(
+            f"Job {job_id}: video generated "
+            f"successfully at {video_path}"
+        )
+
+        # ----------------------------------------------------
+        # 6. تحضير وصف الفيديو
+        # ----------------------------------------------------
+
+        description = (
+            script_data.get("description")
+            or script_data.get("full_text")
+            or ""
+        )
+
+        if not description:
+
+            description = (
+                f"فيديو تم إنشاؤه تلقائياً "
+                f"بالذكاء الاصطناعي عن: {title}"
+            )
+
+        # ----------------------------------------------------
+        # 7. رفع الفيديو إلى YouTube Studio
+        # ----------------------------------------------------
+
+        log(
+            f"Job {job_id}: uploading video "
+            f"to YouTube..."
+        )
+
+        try:
+
+            youtube_video_id = await asyncio.to_thread(
+                upload_private,
+                str(video_path),
+                title,
+                description,
+                (
+                    str(thumb_path)
+                    if thumb_path
+                    else None
+                ),
+            )
+
+            if not youtube_video_id:
+
+                raise RuntimeError(
+                    "لم يتم الحصول على Video ID "
+                    "من YouTube"
+                )
+
+            log(
+                f"Job {job_id}: YouTube upload "
+                f"completed successfully. "
+                f"Video ID: {youtube_video_id}"
+            )
+
+        except Exception as upload_error:
+
+            log(
+                f"Job {job_id}: YouTube upload ERROR: "
+                f"{repr(upload_error)}"
+            )
+
+            raise RuntimeError(
+                f"فشل رفع الفيديو إلى YouTube: "
+                f"{upload_error}"
+            )
+
+        # ----------------------------------------------------
+        # 8. حفظ نتيجة المهمة
+        # ----------------------------------------------------
+
         save_job_result(
             job_id=job_id,
             title=title,
             script=script_data,
             video_path=str(video_path),
-            thumb_path=str(thumb_path)
+            thumb_path=(
+                str(thumb_path)
+                if thumb_path
+                else ""
+            ),
         )
-        update_job_status(job_id, "completed")
-        log(f"Job {job_id}: completed successfully")
+
+        # ----------------------------------------------------
+        # 9. تحديث الحالة إلى مكتمل
+        # ----------------------------------------------------
+
+        update_job_status(
+            job_id,
+            "completed",
+        )
+
+        log(
+            f"Job {job_id}: completed "
+            f"successfully"
+        )
+
         return True
 
     except Exception as e:
+
         error_msg = str(e)
-        log(f"Job {job_id}: ERROR {error_msg}")
+
+        log(
+            f"Job {job_id}: ERROR "
+            f"{error_msg}"
+        )
+
         traceback.print_exc()
-        update_job_status(job_id, "failed", error=error_msg)
+
+        update_job_status(
+            job_id,
+            "failed",
+            error=error_msg,
+        )
+
         return False
 
+
 # ----------------------------------------------------
-# 5. الدوال المطلوبة لـ main.py
+# 5. رفع المهمة
 # ----------------------------------------------------
 
 async def upload_job(job_id: str):
-    """رفع الفيديو إلى المنصات المحددة"""
-    log(f"Uploading job {job_id}...")
+
+    """
+    رفع الفيديو إلى المنصات المحددة.
+
+    ملاحظة:
+    الرفع الحقيقي يتم الآن داخل run_job
+    بعد إنشاء الفيديو.
+    """
+
+    log(
+        f"Uploading job {job_id}..."
+    )
+
     await asyncio.sleep(1)
+
     return True
 
-async def publish_job(job_id: str):
-    """نشر الفيديو رسمياً"""
-    log(f"Publishing job {job_id}...")
-    await asyncio.sleep(1)
-    return True
-
-async def autopilot_once():
-    """تشغيل عملية الطيار الآلي لمرة واحدة"""
-    log("Running autopilot cycle...")
-    job = get_pending_job()
-    if job:
-        return await run_job(job)
-    log("No pending jobs found for autopilot.")
-    return False
 
 # ----------------------------------------------------
-# 6. حلقة تشغيل الـ Worker
+# 6. نشر الفيديو
+# ----------------------------------------------------
+
+async def publish_job(job_id: str):
+
+    """
+    نشر الفيديو رسمياً.
+
+    الفيديو في النسخة الحالية يتم رفعه
+    إلى YouTube كـ Private أولاً.
+    """
+
+    log(
+        f"Publishing job {job_id}..."
+    )
+
+    await asyncio.sleep(1)
+
+    return True
+
+
+# ----------------------------------------------------
+# 7. تشغيل الطيار الآلي مرة واحدة
+# ----------------------------------------------------
+
+async def autopilot_once():
+
+    log(
+        "Running autopilot cycle..."
+    )
+
+    job = get_pending_job()
+
+    if job:
+
+        return await run_job(
+            job
+        )
+
+    log(
+        "No pending jobs found "
+        "for autopilot."
+    )
+
+    return False
+
+
+# ----------------------------------------------------
+# 8. حلقة تشغيل الـ Worker
 # ----------------------------------------------------
 
 async def worker_loop():
-    log("Worker loop started.")
+
+    log(
+        "Worker loop started."
+    )
+
     try:
+
         clear_hung_jobs()
+
     except Exception as e:
-        log(f"Error clearing hung jobs: {e}")
+
+        log(
+            f"Error clearing hung jobs: {e}"
+        )
 
     while True:
+
         try:
+
             job = get_pending_job()
+
             if job:
-                await run_job(job)
+
+                await run_job(
+                    job
+                )
+
             else:
-                await asyncio.sleep(5)
+
+                await asyncio.sleep(
+                    5
+                )
+
         except asyncio.CancelledError:
+
             break
+
         except Exception as e:
-            log(f"Unexpected error in worker loop: {e}")
-            await asyncio.sleep(5)
+
+            log(
+                f"Unexpected error in "
+                f"worker loop: {e}"
+            )
+
+            await asyncio.sleep(
+                5
+            )
+
+
+# ----------------------------------------------------
+# 9. تشغيل الملف مباشرة
+# ----------------------------------------------------
 
 if __name__ == "__main__":
+
     try:
-        asyncio.run(worker_loop())
+
+        asyncio.run(
+            worker_loop()
+        )
+
     except KeyboardInterrupt:
-        log("Worker stopped manually.")
-        
+
+        log(
+            "Worker stopped manually."
+                )
