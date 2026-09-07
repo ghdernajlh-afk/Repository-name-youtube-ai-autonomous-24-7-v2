@@ -1,60 +1,44 @@
 import asyncio
+import html
+import math
 import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import edge_tts
+from PIL import Image, ImageDraw, ImageFont
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-WIDTH = 1920
-HEIGHT = 1080
-FPS = 30
+WIDTH = int(os.getenv("VIDEO_WIDTH", "1920"))
+HEIGHT = int(os.getenv("VIDEO_HEIGHT", "1080"))
+FPS = int(os.getenv("VIDEO_FPS", "30"))
 
-# Target only. Actual duration follows the generated narration.
-TARGET_VIDEO_DURATION = 600.0
-
-DEFAULT_BG = (10, 16, 30)
-ACCENT = (55, 130, 255)
-TEXT_COLOR = (255, 255, 255)
-MUTED = (205, 215, 230)
-
-BRAND_NAME = "نبض المستقبل | Future Pulse 🚀"
-WATERMARK_TEXT = BRAND_NAME
-
-WATERMARK_FONT_SIZE = 28
-WATERMARK_ALPHA = 165
-WATERMARK_MARGIN = 42
-
-MAX_SCENES = 60
-MIN_SCENE_DURATION = 5.0
-MAX_SCENE_DURATION = 18.0
-
-MOTION_ZOOM = 0.065
-
-# Safety timeouts.
-TTS_TIMEOUT = int(os.getenv("TTS_TIMEOUT", "180"))
-
-# Number of automatic Edge TTS retries.
-TTS_RETRIES = int(os.getenv("TTS_RETRIES", "3"))
-
-FFMPEG_TIMEOUT = int(os.getenv("FFMPEG_TIMEOUT", "900"))
-FFPROBE_TIMEOUT = int(os.getenv("FFPROBE_TIMEOUT", "60"))
-
-VIDEO_PRESET = os.getenv(
-    "VIDEO_PRESET",
-    "veryfast"
+DEFAULT_VOICE = os.getenv(
+    "VOICE",
+    "ar-SA-HamedNeural"
 )
 
-VIDEO_CRF = os.getenv(
-    "VIDEO_CRF",
-    "21"
+FONT_SIZE_TITLE = int(
+    os.getenv("FONT_SIZE_TITLE", "72")
+)
+
+FONT_SIZE_TEXT = int(
+    os.getenv("FONT_SIZE_TEXT", "48")
+)
+
+SCENE_MIN_DURATION = float(
+    os.getenv("SCENE_MIN_DURATION", "4")
+)
+
+SCENE_MAX_DURATION = float(
+    os.getenv("SCENE_MAX_DURATION", "12")
 )
 
 
@@ -70,857 +54,1095 @@ def log(message):
 
 
 # ============================================================
-# COMMAND EXECUTION
+# HELPERS
 # ============================================================
 
-def run_command(
-    cmd,
-    timeout=None,
-    description="command"
-):
-    if timeout is None:
-        timeout = FFMPEG_TIMEOUT
+def find_ffmpeg():
+    """
+    البحث عن ffmpeg.
+    """
 
-    log(
-        f"Running {description}..."
+    candidates = [
+        shutil.which("ffmpeg"),
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+    ]
+
+    for candidate in candidates:
+
+        if candidate and Path(candidate).exists():
+
+            return candidate
+
+    return None
+
+
+def find_ffprobe():
+    """
+    البحث عن ffprobe.
+    """
+
+    candidates = [
+        shutil.which("ffprobe"),
+        "/usr/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+    ]
+
+    for candidate in candidates:
+
+        if candidate and Path(candidate).exists():
+
+            return candidate
+
+    return None
+
+
+def require_ffmpeg():
+
+    ffmpeg = find_ffmpeg()
+
+    if not ffmpeg:
+
+        raise RuntimeError(
+            "FFmpeg غير موجود في بيئة التشغيل."
+        )
+
+    return ffmpeg
+
+
+def clean_text(value):
+
+    if value is None:
+        return ""
+
+    value = str(value)
+
+    value = html.unescape(value)
+
+    value = re.sub(
+        r"<[^>]+>",
+        "",
+        value
     )
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+    value = re.sub(
+        r"\s+",
+        " ",
+        value
+    )
+
+    return value.strip()
+
+
+def safe_filename(name):
+
+    name = clean_text(name)
+
+    name = re.sub(
+        r'[\\/:*?"<>|]+',
+        "_",
+        name
+    )
+
+    name = name.strip()
+
+    if not name:
+        name = "file"
+
+    return name[:120]
+
+
+def run_command(command, timeout=None):
+
+    log(
+        "Running command: "
+        + " ".join(
+            str(x) for x in command
         )
-    except subprocess.TimeoutExpired as exc:
+    )
+
+    process = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+    )
+
+    if process.returncode != 0:
+
+        error = (
+            process.stderr[-4000:]
+            if process.stderr
+            else "Unknown FFmpeg error"
+        )
+
         raise RuntimeError(
-            f"{description} timed out after "
-            f"{timeout} seconds."
-        ) from exc
-
-    if result.returncode != 0:
-        stderr = (
-            result.stderr
-            or result.stdout
-            or "Unknown command error."
+            f"Command failed:\n{error}"
         )
 
-        stderr = stderr[-6000:]
-
-        raise RuntimeError(
-            f"{description} failed "
-            f"(exit code {result.returncode}):\n"
-            f"{stderr}"
-        )
-
-    return result
+    return process
 
 
 # ============================================================
-# FONT
+# FONTS
 # ============================================================
 
-def get_font(size, bold=False):
-    candidates = []
+def find_font():
 
-    if bold:
-        candidates += [
-            "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "C:/Windows/Fonts/arialbd.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        ]
-    else:
-        candidates += [
-            "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "C:/Windows/Fonts/arial.ttf",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
-        ]
+    env_font = os.getenv(
+        "VIDEO_FONT",
+        ""
+    ).strip()
 
-    for path in candidates:
-        if Path(path).exists():
-            try:
-                return ImageFont.truetype(
-                    path,
-                    size
-                )
-            except Exception:
-                pass
+    if env_font:
+
+        path = Path(env_font)
+
+        if path.exists():
+
+            return str(path)
+
+    candidates = [
+
+        # Linux / Render
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+
+        # Arabic fonts if available
+        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+
+        # Local project fonts
+        "fonts/DejaVuSans.ttf",
+        "fonts/NotoSansArabic-Regular.ttf",
+        "fonts/NotoNaskhArabic-Regular.ttf",
+    ]
+
+    for font in candidates:
+
+        if Path(font).exists():
+
+            return font
+
+    return None
+
+
+def get_font(size):
+
+    font_path = find_font()
+
+    if font_path:
+
+        try:
+
+            return ImageFont.truetype(
+                font_path,
+                size
+            )
+
+        except Exception:
+
+            pass
 
     return ImageFont.load_default()
 
 
 # ============================================================
-# TEXT
+# ARABIC / RTL HELPERS
 # ============================================================
 
-def clean_text(text):
-    text = str(text or "")
+def prepare_rtl_text(text):
 
-    text = re.sub(
-        r"https?://\S+",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
-
-
-def wrap(text, width=42):
     text = clean_text(text)
 
     if not text:
         return ""
 
-    words = text.split()
+    try:
 
-    lines = []
-    current = ""
+        import arabic_reshaper
+        from bidi.algorithm import get_display
 
-    for word in words:
-        candidate = (
-            f"{current} {word}".strip()
+        reshaped = arabic_reshaper.reshape(
+            text
         )
 
-        if (
-            len(candidate) > width
-            and current
-        ):
-            lines.append(current)
-            current = word
-        else:
-            current = candidate
+        return get_display(
+            reshaped
+        )
 
-    if current:
-        lines.append(current)
+    except Exception:
 
-    return "\n".join(lines)
+        # المشروع يعمل حتى بدون المكتبات الإضافية
+        return text
 
 
-def fit_text(
+# ============================================================
+# TEXT WRAPPING
+# ============================================================
+
+def wrap_text(
     draw,
     text,
-    max_width,
-    max_height,
-    start_size,
-    bold=False,
+    font,
+    max_width
 ):
+
     text = clean_text(text)
 
     if not text:
-        return (
-            "",
-            get_font(
-                start_size,
-                bold
-            )
-        )
 
-    size = start_size
+        return []
 
-    while size >= 24:
-        font = get_font(
-            size,
-            bold
-        )
+    words = text.split()
 
-        wrapped = wrap(
-            text,
-            max(
-                12,
-                int(
-                    max_width
-                    / max(1, size * 0.55)
-                )
-            )
-        )
+    lines = []
 
-        bbox = draw.multiline_textbbox(
-            (0, 0),
-            wrapped,
-            font=font,
-            spacing=int(size * 0.25),
-            align="center",
-        )
-
-        width = (
-            bbox[2] - bbox[0]
-        )
-
-        height = (
-            bbox[3] - bbox[1]
-        )
-
-        if (
-            width <= max_width
-            and height <= max_height
-        ):
-            return (
-                wrapped,
-                font
-            )
-
-        size -= 2
-
-    return (
-        wrap(text, 24),
-        get_font(24, bold)
-    )
-
-
-# ============================================================
-# LANGUAGE
-# ============================================================
-
-def detect_language(text):
-    configured = os.getenv(
-        "DEFAULT_LANGUAGE",
-        "ar"
-    ).strip().lower()
-
-    return configured or "ar"
-
-
-# ============================================================
-# HASHTAGS
-# ============================================================
-
-def generate_hashtags(
-    title,
-    script,
-    language="ar"
-):
-    text = clean_text(
-        f"{title} {script}"
-    )
-
-    if not text:
-        return "#FuturePulse"
-
-    words = re.findall(
-        r"[\w\u0600-\u06FF]+",
-        text,
-        flags=re.UNICODE
-    )
-
-    stopwords_ar = {
-        "من", "في", "على", "إلى", "عن",
-        "مع", "هذا", "هذه", "ذلك", "التي",
-        "الذي", "هو", "هي", "و", "أو",
-        "أن", "إن", "كان", "كانت", "ما",
-        "ماذا", "كيف", "لماذا", "لقد",
-        "قد", "بعد", "قبل", "بين",
-        "هناك", "كل", "أي", "كما",
-        "ثم", "لكن", "عندما", "حتى",
-        "لذلك", "فقط",
-    }
-
-    stopwords_en = {
-        "the", "and", "or", "of", "to",
-        "in", "on", "for", "with", "this",
-        "that", "from", "how", "why",
-        "what", "when", "where", "is",
-        "are", "was", "were", "a", "an",
-    }
-
-    stopwords = (
-        stopwords_ar
-        if language.startswith("ar")
-        else stopwords_en
-    )
-
-    unique = []
+    current = ""
 
     for word in words:
-        word = word.strip()
 
-        if len(word) < 3:
-            continue
-
-        if word.lower() in stopwords:
-            continue
-
-        if word not in unique:
-            unique.append(word)
-
-        if len(unique) >= 6:
-            break
-
-    tags = []
-
-    for word in unique:
-        word = re.sub(
-            r"[^\w\u0600-\u06FF]",
-            "",
-            word,
-            flags=re.UNICODE
+        candidate = (
+            word
+            if not current
+            else current + " " + word
         )
 
-        if word:
-            tags.append(
-                f"#{word}"
-            )
-
-    tags.append(
-        "#FuturePulse"
-    )
-
-    if language.startswith("ar"):
-        tags.append(
-            "#نبض_المستقبل"
+        bbox = draw.textbbox(
+            (0, 0),
+            candidate,
+            font=font
         )
 
-    result = []
+        width = bbox[2] - bbox[0]
 
-    for tag in tags:
-        if tag not in result:
-            result.append(tag)
+        if width <= max_width:
 
-    return " ".join(
-        result[:8]
-    )
+            current = candidate
+
+        else:
+
+            if current:
+
+                lines.append(
+                    current
+                )
+
+            current = word
+
+    if current:
+
+        lines.append(
+            current
+        )
+
+    return lines
 
 
 # ============================================================
 # BACKGROUND
 # ============================================================
 
-def make_background(index):
+def create_gradient_background(
+    width,
+    height,
+    index=0
+):
+
+    image = Image.new(
+        "RGB",
+        (width, height),
+        (12, 18, 32)
+    )
+
+    pixels = image.load()
+
     palettes = [
-        ((8, 18, 42), (25, 75, 145)),
-        ((8, 30, 25), (20, 110, 90)),
-        ((35, 12, 50), (105, 35, 135)),
-        ((48, 25, 8), (145, 75, 25)),
-        ((5, 35, 48), (15, 115, 135)),
-        ((45, 10, 25), (125, 35, 70)),
-        ((15, 18, 48), (70, 55, 150)),
-        ((20, 40, 10), (80, 120, 35)),
+
+        (
+            (11, 20, 40),
+            (34, 90, 150),
+        ),
+
+        (
+            (28, 12, 45),
+            (80, 35, 110),
+        ),
+
+        (
+            (8, 40, 45),
+            (25, 105, 100),
+        ),
+
+        (
+            (35, 18, 15),
+            (120, 60, 25),
+        ),
+
+        (
+            (15, 20, 30),
+            (70, 75, 100),
+        ),
     ]
 
-    c1, c2 = palettes[
+    top, bottom = palettes[
         index % len(palettes)
     ]
 
-    small = Image.new(
-        "RGB",
-        (1, HEIGHT),
-        c1
-    )
+    for y in range(height):
 
-    pixels = small.load()
-
-    for y in range(HEIGHT):
-        ratio = (
-            y / max(
-                1,
-                HEIGHT - 1
-            )
+        ratio = y / max(
+            height - 1,
+            1
         )
 
-        pixels[0, y] = (
-            int(
-                c1[0] * (1 - ratio)
-                + c2[0] * ratio
-            ),
-            int(
-                c1[1] * (1 - ratio)
-                + c2[1] * ratio
-            ),
-            int(
-                c1[2] * (1 - ratio)
-                + c2[2] * ratio
-            ),
-        )
-
-    image = small.resize(
-        (WIDTH, HEIGHT)
-    )
-
-    overlay = Image.new(
-        "RGBA",
-        (WIDTH, HEIGHT),
-        (0, 0, 0, 0)
-    )
-
-    draw = ImageDraw.Draw(
-        overlay
-    )
-
-    positions = [
-        (
-            260 + (index * 83) % 500,
-            170,
-            300,
-            (70, 150, 255, 40),
-        ),
-        (
-            1500 - (index * 61) % 400,
-            250,
-            360,
-            (150, 80, 255, 35),
-        ),
-        (
-            950,
-            900,
-            420,
-            (50, 200, 180, 28),
-        ),
-    ]
-
-    for x, y, radius, color in positions:
-        draw.ellipse(
-            (
-                x - radius,
-                y - radius,
-                x + radius,
-                y + radius,
-            ),
-            fill=color
-        )
-
-    for n in range(10):
-        x = (
-            100
+        r = int(
+            top[0]
             + (
-                (
-                    index * 137
-                    + n * 277
-                )
-                % (WIDTH - 200)
+                bottom[0]
+                - top[0]
             )
+            * ratio
         )
 
-        y = (
-            80
+        g = int(
+            top[1]
             + (
-                (
-                    index * 71
-                    + n * 149
-                )
-                % (HEIGHT - 160)
+                bottom[1]
+                - top[1]
             )
+            * ratio
         )
 
-        radius = 2 + (n % 4)
-
-        draw.ellipse(
-            (
-                x - radius,
-                y - radius,
-                x + radius,
-                y + radius,
-            ),
-            fill=(255, 255, 255, 45)
+        b = int(
+            top[2]
+            + (
+                bottom[2]
+                - top[2]
+            )
+            * ratio
         )
 
-    overlay = overlay.filter(
-        ImageFilter.GaussianBlur(55)
-    )
+        for x in range(width):
 
-    image = Image.alpha_composite(
-        image.convert("RGBA"),
-        overlay
-    )
+            pixels[x, y] = (
+                r,
+                g,
+                b,
+            )
 
-    return image.convert("RGB")
+    return image
 
 
 # ============================================================
-# WATERMARK
-# ============================================================
-
-def add_watermark(
-    image,
-    text=WATERMARK_TEXT
-):
-    image = image.convert(
-        "RGBA"
-    )
-
-    overlay = Image.new(
-        "RGBA",
-        image.size,
-        (0, 0, 0, 0)
-    )
-
-    draw = ImageDraw.Draw(
-        overlay
-    )
-
-    font = get_font(
-        WATERMARK_FONT_SIZE,
-        bold=False
-    )
-
-    bbox = draw.textbbox(
-        (0, 0),
-        text,
-        font=font
-    )
-
-    text_width = (
-        bbox[2] - bbox[0]
-    )
-
-    text_height = (
-        bbox[3] - bbox[1]
-    )
-
-    x = (
-        WIDTH
-        - text_width
-        - WATERMARK_MARGIN
-    )
-
-    y = (
-        HEIGHT
-        - text_height
-        - WATERMARK_MARGIN
-    )
-
-    draw.rounded_rectangle(
-        (
-            x - 16,
-            y - 10,
-            x + text_width + 16,
-            y + text_height + 10,
-        ),
-        radius=15,
-        fill=(0, 0, 0, 95)
-    )
-
-    draw.text(
-        (x, y),
-        text,
-        font=font,
-        fill=(
-            255,
-            255,
-            255,
-            WATERMARK_ALPHA
-        )
-    )
-
-    return Image.alpha_composite(
-        image,
-        overlay
-    ).convert("RGB")
-
-
-# ============================================================
-# SCENE CARD
+# DRAW CARD
 # ============================================================
 
 def draw_card(
     title,
-    subtitle,
-    index,
-    total
+    text,
+    output_path,
+    index=0,
+    is_thumbnail=False,
 ):
-    image = make_background(
+
+    width = WIDTH
+    height = HEIGHT
+
+    image = create_gradient_background(
+        width,
+        height,
         index
     )
 
+    draw = ImageDraw.Draw(
+        image
+    )
+
+    # --------------------------------------------------------
+    # DARK OVERLAY
+    # --------------------------------------------------------
+
     overlay = Image.new(
         "RGBA",
-        image.size,
+        (width, height),
         (0, 0, 0, 0)
     )
 
-    draw = ImageDraw.Draw(
+    overlay_draw = ImageDraw.Draw(
         overlay
     )
 
-    left = 110
-    top = 100
-    right = WIDTH - 110
-    bottom = HEIGHT - 105
-
-    draw.rounded_rectangle(
+    overlay_draw.rectangle(
         (
-            left,
-            top,
-            right,
-            bottom,
+            0,
+            0,
+            width,
+            height,
         ),
-        radius=45,
-        fill=(0, 0, 0, 125),
-        outline=(255, 255, 255, 45),
-        width=2,
+        fill=(
+            0,
+            0,
+            0,
+            70,
+        ),
     )
 
     image = Image.alpha_composite(
         image.convert("RGBA"),
         overlay
-    ).convert("RGB")
+    )
 
     draw = ImageDraw.Draw(
         image
     )
 
-    badge_font = get_font(
-        27,
-        bold=True
+    # --------------------------------------------------------
+    # TOP LABEL
+    # --------------------------------------------------------
+
+    label = "FUTURE PULSE"
+
+    label_font = get_font(
+        28
     )
-
-    badge_text = (
-        f"المشهد {index + 1} / {total}"
-    )
-
-    badge_bbox = draw.textbbox(
-        (0, 0),
-        badge_text,
-        font=badge_font
-    )
-
-    badge_width = (
-        badge_bbox[2]
-        - badge_bbox[0]
-        + 55
-    )
-
-    badge_height = 58
-
-    badge_x = (
-        WIDTH
-        - 150
-        - badge_width
-    )
-
-    badge_y = 145
 
     draw.rounded_rectangle(
         (
-            badge_x,
-            badge_y,
-            badge_x + badge_width,
-            badge_y + badge_height,
+            60,
+            55,
+            380,
+            110,
         ),
-        radius=29,
-        fill=ACCENT
+        radius=18,
+        fill=(
+            0,
+            0,
+            0,
+            150,
+        ),
     )
 
     draw.text(
         (
-            badge_x + badge_width / 2,
-            badge_y + badge_height / 2,
+            90,
+            70,
         ),
-        badge_text,
-        font=badge_font,
-        fill=TEXT_COLOR,
-        anchor="mm"
+        label,
+        font=label_font,
+        fill=(
+            255,
+            255,
+            255,
+        ),
     )
 
-    title_text, title_font = fit_text(
+    # --------------------------------------------------------
+    # TITLE
+    # --------------------------------------------------------
+
+    title_font = get_font(
+        FONT_SIZE_TITLE
+        if is_thumbnail
+        else max(
+            48,
+            int(FONT_SIZE_TITLE * 0.75)
+        )
+    )
+
+    body_font = get_font(
+        FONT_SIZE_TEXT
+    )
+
+    max_text_width = int(
+        width * 0.82
+    )
+
+    title = prepare_rtl_text(
+        title
+    )
+
+    body = prepare_rtl_text(
+        text
+    )
+
+    title_lines = wrap_text(
         draw,
-        clean_text(title),
-        max_width=WIDTH - 360,
-        max_height=300,
-        start_size=72,
-        bold=True,
+        title,
+        title_font,
+        max_text_width
     )
 
-    draw.multiline_text(
-        (
-            WIDTH // 2,
-            310
-        ),
-        title_text,
-        font=title_font,
-        fill=TEXT_COLOR,
-        spacing=22,
-        align="center",
-        anchor="mm"
-    )
-
-    subtitle_text, subtitle_font = fit_text(
+    body_lines = wrap_text(
         draw,
-        clean_text(subtitle),
-        max_width=WIDTH - 420,
-        max_height=250,
-        start_size=38,
-        bold=False,
+        body,
+        body_font,
+        max_text_width
     )
 
-    draw.multiline_text(
-        (
-            WIDTH // 2,
-            620
+    if is_thumbnail:
+
+        title_lines = title_lines[:4]
+
+        body_lines = []
+
+    else:
+
+        title_lines = title_lines[:3]
+
+        body_lines = body_lines[:5]
+
+    # --------------------------------------------------------
+    # CALCULATE HEIGHT
+    # --------------------------------------------------------
+
+    title_line_height = int(
+        title_font.size * 1.35
+    )
+
+    body_line_height = int(
+        body_font.size * 1.45
+    )
+
+    title_height = (
+        len(title_lines)
+        * title_line_height
+    )
+
+    body_height = (
+        len(body_lines)
+        * body_line_height
+    )
+
+    total_height = (
+        title_height
+        + body_height
+        + 80
+    )
+
+    start_y = max(
+        150,
+        int(
+            (
+                height
+                - total_height
+            )
+            / 2
         ),
-        subtitle_text,
-        font=subtitle_font,
-        fill=MUTED,
-        spacing=15,
-        align="center",
-        anchor="mm"
     )
 
-    line_y = HEIGHT - 180
-    line_left = 180
-    line_right = WIDTH - 180
+    # --------------------------------------------------------
+    # TEXT SHADOW
+    # --------------------------------------------------------
 
-    draw.rounded_rectangle(
+    def draw_centered_line(
+        line,
+        y,
+        font,
+        color,
+        shadow=True,
+    ):
+
+        bbox = draw.textbbox(
+            (0, 0),
+            line,
+            font=font
+        )
+
+        line_width = (
+            bbox[2]
+            - bbox[0]
+        )
+
+        x = (
+            width
+            - line_width
+        ) // 2
+
+        if shadow:
+
+            draw.text(
+                (
+                    x + 3,
+                    y + 4,
+                ),
+                line,
+                font=font,
+                fill=(
+                    0,
+                    0,
+                    0,
+                    190,
+                ),
+            )
+
+        draw.text(
+            (
+                x,
+                y,
+            ),
+            line,
+            font=font,
+            fill=color,
+        )
+
+    # --------------------------------------------------------
+    # DRAW TITLE
+    # --------------------------------------------------------
+
+    current_y = start_y
+
+    for line in title_lines:
+
+        draw_centered_line(
+            line,
+            current_y,
+            title_font,
+            (
+                255,
+                255,
+                255,
+            ),
+        )
+
+        current_y += (
+            title_line_height
+        )
+
+    current_y += 35
+
+    # --------------------------------------------------------
+    # DRAW BODY
+    # --------------------------------------------------------
+
+    for line in body_lines:
+
+        draw_centered_line(
+            line,
+            current_y,
+            body_font,
+            (
+                225,
+                230,
+                240,
+            ),
+        )
+
+        current_y += (
+            body_line_height
+        )
+
+    # --------------------------------------------------------
+    # FOOTER
+    # --------------------------------------------------------
+
+    footer = "نبض المستقبل"
+
+    footer_font = get_font(
+        30
+    )
+
+    footer_rtl = prepare_rtl_text(
+        footer
+    )
+
+    bbox = draw.textbbox(
+        (0, 0),
+        footer_rtl,
+        font=footer_font
+    )
+
+    footer_width = (
+        bbox[2]
+        - bbox[0]
+    )
+
+    draw.text(
         (
-            line_left,
-            line_y,
-            line_right,
-            line_y + 10,
+            (
+                width
+                - footer_width
+            )
+            // 2,
+            height - 80,
         ),
-        radius=5,
-        fill=(255, 255, 255, 55)
-    )
-
-    progress = (
-        (index + 1)
-        / max(1, total)
-    )
-
-    progress_right = int(
-        line_left
-        + (
-            line_right - line_left
-        ) * progress
-    )
-
-    draw.rounded_rectangle(
-        (
-            line_left,
-            line_y,
-            progress_right,
-            line_y + 10,
+        footer_rtl,
+        font=footer_font,
+        fill=(
+            220,
+            220,
+            220,
         ),
-        radius=5,
-        fill=ACCENT
     )
 
-    return add_watermark(
-        image
-)
-    # ============================================================
-# CREATE JOB
+    # --------------------------------------------------------
+    # SAVE
+    # --------------------------------------------------------
+
+    output_path = Path(
+        output_path
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    image.convert(
+        "RGB"
+    ).save(
+        output_path,
+        quality=95
+    )
+
+    return output_path
+
+
+# ============================================================
+# NARRATION
 # ============================================================
 
-@app.post("/create")
-def create(
-    topic: str = Form(...),
+async def edge_tts_async(
+    text,
+    voice,
+    output_path,
 ):
 
-    print(
-        f"[CREATE] Request received. Topic: {topic}",
-        flush=True
+    communicate = edge_tts.Communicate(
+        text,
+        voice,
     )
 
-    jid = add_job(
-        topic,
-        os.getenv(
-            "DEFAULT_LANGUAGE",
-            "ar"
-        ),
+    await communicate.save(
+        str(output_path)
     )
 
-    if not jid:
 
-        print(
-            "[CREATE] Job was not created "
-            "(possibly duplicate topic)",
-            flush=True
+def generate_narration(
+    text,
+    voice,
+    output_path,
+):
+
+    text = clean_text(
+        text
+    )
+
+    if not text:
+
+        raise RuntimeError(
+            "نص التعليق الصوتي فارغ."
         )
 
-        return RedirectResponse(
-            "/",
-            status_code=303,
+    output_path = Path(
+        output_path
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    attempts = 3
+
+    for attempt in range(
+        1,
+        attempts + 1
+    ):
+
+        try:
+
+            log(
+                f"Starting Edge TTS "
+                f"attempt {attempt}/{attempts} "
+                f"with voice: {voice}"
+            )
+
+            if output_path.exists():
+
+                output_path.unlink()
+
+            asyncio.run(
+                edge_tts_async(
+                    text,
+                    voice,
+                    output_path,
+                )
+            )
+
+            if (
+                output_path.exists()
+                and output_path.stat().st_size > 1000
+            ):
+
+                log(
+                    f"Edge TTS completed successfully "
+                    f"on attempt {attempt}."
+                )
+
+                return output_path
+
+            raise RuntimeError(
+                "Edge TTS created an empty audio file."
+            )
+
+        except Exception as error:
+
+            log(
+                f"Edge TTS attempt {attempt} failed: "
+                f"{repr(error)}"
+            )
+
+            if attempt >= attempts:
+
+                raise RuntimeError(
+                    f"فشل Edge TTS بعد "
+                    f"{attempts} محاولات: "
+                    f"{error}"
+                )
+
+            time.sleep(
+                attempt * 2
+            )
+
+    raise RuntimeError(
+        "فشل توليد التعليق الصوتي."
+    )
+
+
+# ============================================================
+# AUDIO DURATION
+# ============================================================
+
+def get_audio_duration(
+    audio_path
+):
+
+    ffprobe = find_ffprobe()
+
+    if ffprobe:
+
+        try:
+
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(audio_path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+
+            duration = float(
+                result.stdout.strip()
+            )
+
+            if duration > 0:
+
+                return duration
+
+        except Exception as error:
+
+            log(
+                f"FFprobe duration failed: "
+                f"{repr(error)}"
+            )
+
+    # Fallback تقريبي
+    size = Path(
+        audio_path
+    ).stat().st_size
+
+    estimated = size / 16000
+
+    return max(
+        estimated,
+        5.0
+    )
+
+
+# ============================================================
+# SCENE NORMALIZATION
+# ============================================================
+
+def normalize_scenes(
+    scenes,
+    script,
+):
+
+    normalized = []
+
+    if isinstance(
+        scenes,
+        list
+    ):
+
+        for index, scene in enumerate(
+            scenes,
+            start=1
+        ):
+
+            if isinstance(
+                scene,
+                dict
+            ):
+
+                text = (
+                    scene.get("text")
+                    or scene.get("narration")
+                    or scene.get("description")
+                    or scene.get("caption")
+                    or ""
+                )
+
+                title = (
+                    scene.get("title")
+                    or scene.get("heading")
+                    or ""
+                )
+
+            else:
+
+                text = str(scene)
+
+                title = ""
+
+            text = clean_text(
+                text
+            )
+
+            title = clean_text(
+                title
+            )
+
+            if text or title:
+
+                normalized.append(
+                    {
+                        "title": title,
+                        "text": text,
+                    }
+                )
+
+    if normalized:
+
+        return normalized
+
+    # --------------------------------------------------------
+    # FALLBACK:
+    # تقسيم النص إلى فقرات
+    # --------------------------------------------------------
+
+    script = clean_text(
+        script
+    )
+
+    if not script:
+
+        return [
+            {
+                "title": "فيديو جديد",
+                "text": "",
+            }
+        ]
+
+    sentences = re.split(
+        r"(?<=[.!؟?])\s+",
+        script
+    )
+
+    buffer = []
+
+    for sentence in sentences:
+
+        sentence = sentence.strip()
+
+        if sentence:
+
+            buffer.append(
+                sentence
+            )
+
+    if not buffer:
+
+        buffer = [script]
+
+    group_size = max(
+        1,
+        math.ceil(
+            len(buffer) / 8
+        )
+    )
+
+    for start in range(
+        0,
+        len(buffer),
+        group_size
+    ):
+
+        part = " ".join(
+            buffer[
+                start:
+                start + group_size
+            ]
         )
 
-    print(
-        f"[CREATE] Created job {jid}",
-        flush=True
-    )
+        normalized.append(
+            {
+                "title": "",
+                "text": part,
+            }
+        )
 
-    # مهم:
-    # لا نستخدم FastAPI BackgroundTasks هنا.
-    # نشغل العامل في Thread مباشر مثل Autopilot.
-    thread = threading.Thread(
-        target=run_job,
-        args=(jid,),
-        daemon=True,
-        name=f"youtube-worker-{jid}",
-    )
-
-    thread.start()
-
-    print(
-        f"[CREATE] Started worker thread for job {jid}",
-        flush=True
-    )
-
-    return RedirectResponse(
-        "/",
-        status_code=303,
-    )
+    return normalized
 
 
 # ============================================================
-# AUTOPILOT BUTTON
+# PREPARE SCENES
 # ============================================================
 
-@app.post("/autopilot")
-def enable_autopilot():
+def prepare_scenes(
+    title,
+    script,
+    scenes,
+):
 
-    os.environ["AUTOPILOT"] = "true"
-
-    print(
-        "[AUTOPILOT] Enabled from Dashboard",
-        flush=True
+    prepared = normalize_scenes(
+        scenes,
+        script,
     )
 
-    # تشغيل أول عملية فورًا بدل الانتظار ساعة
-    threading.Thread(
-        target=autopilot_once,
-        daemon=True,
-        name="autopilot-now",
-    ).start()
+    if not prepared:
 
-    return RedirectResponse(
-        "/",
-        status_code=303,
-    )
+        prepared = [
+            {
+                "title": title,
+                "text": script,
+            }
+        ]
 
+    # إعطاء عنوان رئيسي للمشهد الأول
+    if prepared:
 
-# ============================================================
-# UPLOAD
-# ============================================================
+        if not prepared[0].get(
+            "title"
+        ):
 
-@app.post("/upload/{jid}")
-def upload(jid: int):
+            prepared[0][
+                "title"
+            ] = title
 
-    upload_job(jid)
-
-    return RedirectResponse(
-        "/",
-        status_code=303,
-    )
+    return prepared
 
 
-# ============================================================
-# PUBLISH
-# ============================================================
-
-@app.post("/publish/{jid}")
-def publish(jid: int):
-
-    publish_job(jid)
-
-    return RedirectResponse(
-        "/",
-        status_code=303,
-    )
+# ================================
