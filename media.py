@@ -48,13 +48,12 @@ def get_font(size: int):
     return ImageFont.load_default()
 
 def reshape_arabic(text: str) -> str:
-    """إصلاح تشكيل وتوصيل اتجاه اللغة العربية بشكل مضمون 100%"""
+    """إصلاح تشكيل وتوصيل اتجاه اللغة العربية"""
     if not text:
         return ""
     try:
         reshaped = arabic_reshaper.reshape(text)
-        bidi_text = get_display(reshaped)
-        return bidi_text
+        return get_display(reshaped)
     except Exception as e:
         log(f"Arabic reshape warning: {e}")
         return text
@@ -71,7 +70,7 @@ def draw_card(title: str, text: str, output_path: Path, is_thumbnail: bool = Fal
     font_title = get_font(48 if is_thumbnail else 40)
     font_text = get_font(28)
 
-    # رسم بطاقة خلفية أنيقة لتوضيح النصوص
+    # رسم بطاقة خلفية أنيقة
     margin = 50
     card_box = [margin, margin, VIDEO_WIDTH - margin, VIDEO_HEIGHT - margin]
     draw.rounded_rectangle(card_box, radius=20, fill=(35, 45, 66), outline=(70, 90, 120), width=3)
@@ -112,7 +111,7 @@ def get_audio_duration(audio_path: Path) -> float:
         return float(res.stdout.strip())
     except Exception as e:
         log(f"Error getting audio duration: {e}")
-        return 10.0
+        return 8.0
 
 async def text_to_speech_edge(text: str, output_path: Path, voice: str = "ar-EG-SalmaNeural"):
     """توليد الصوت باستخدام edge-tts"""
@@ -123,7 +122,7 @@ async def text_to_speech_edge(text: str, output_path: Path, voice: str = "ar-EG-
 async def make_video(job_id: str = "", title: str = "", script_items: list = None, *args, **kwargs) -> tuple[Path, Path]:
     """
     إنشاء أجزاء الفيديو وتجميعها بملف واحد وإعداد الصورة المصغرة.
-    تقبل جميع الوسائط الزائدة من worker (*args, **kwargs) لتجنب أخطاء المعاملات.
+    تقبل جميع الوسائط الزائدة (*args, **kwargs) لتجنب أخطاء المعاملات نهائياً.
     """
     if not job_id and len(args) > 0:
         job_id = str(args[0])
@@ -162,7 +161,7 @@ async def make_video(job_id: str = "", title: str = "", script_items: list = Non
 
         duration = get_audio_duration(audio_path) + 0.5
 
-        # 3. دمج الصوت والصورة إلى مقطع فيديو متوافق مع yuv420p لمنع الشاشة السوداء
+        # 3. دمج الصوت والصورة إلى مقطع فيديو
         cmd = [
             ffmpeg, "-y",
             "-loop", "1", "-i", str(img_path.absolute()),
