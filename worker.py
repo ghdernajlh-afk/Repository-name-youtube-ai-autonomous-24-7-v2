@@ -98,7 +98,7 @@ def run_job(job_id):
 
         max_sources = safe_int(
             "MAX_SOURCE_FETCH",
-            4
+            3
         )
 
         log(
@@ -167,7 +167,6 @@ def run_job(job_id):
                     f"{repr(source_error)}"
                 )
 
-            # لا نسمح لمصدر واحد بإيقاف العملية
             continue
 
         # ----------------------------------------------------
@@ -176,7 +175,7 @@ def run_job(job_id):
 
         minimum_sources = safe_int(
             "MIN_SOURCE_COUNT",
-            2
+            1
         )
 
         if len(sources) < minimum_sources:
@@ -580,3 +579,4 @@ def autopilot_once():
         traceback.print_exc()
 
         return None
+        
