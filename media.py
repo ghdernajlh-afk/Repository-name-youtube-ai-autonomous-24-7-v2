@@ -1,119 +1,106 @@
 import os
-import subprocess
-import json
-import math
-from pathlib import Path
-import async_timeout
+import shutil
 import asyncio
-import edge_tts
+import subprocess
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import arabic_reshaper
 from bidi.algorithm import get_display
 
-# ============================================================
-# CONFIGURATION & CONSTANTS
-# ============================================================
+# Dynamic Root Setup
+BASE_DIR = Path(__file__).resolve().parent
+MEDIA_DIR = BASE_DIR / "media_tmp"
+MEDIA_DIR.mkdir(exist_ok=True)
 
-DEFAULT_VOICE = os.getenv("VOICE", "ar-SA-HamedNeural")
-VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "1280"))
-VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", "720"))
-VIDEO_FPS = int(os.getenv("VIDEO_FPS", "20"))
+VIDEO_WIDTH = 1280
+VIDEO_HEIGHT = 720
+VIDEO_FPS = 30
 
-SCENE_MIN_DURATION = 3.0
-SCENE_MAX_DURATION = 15.0
-
-
-def log(msg):
+def log(msg: str):
     print(f"[MEDIA] {msg}", flush=True)
 
+def find_font():
+    """البحث عن خط يدعم اللغة العربية بشكل تلقائي"""
+    custom_font = BASE_DIR / "fonts" / "Cairo-Bold.ttf"
+    if custom_font.exists():
+        return str(custom_font)
 
-def require_ffmpeg():
-    ffmpeg_bin = os.getenv("FFMPEG_BINARY", "ffmpeg")
-    try:
-        subprocess.run([ffmpeg_bin, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        return ffmpeg_bin
-    except Exception:
-        raise RuntimeError("FFmpeg is not available in system environment PATH.")
+    system_fonts = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+    for path in system_fonts:
+        if os.path.exists(path):
+            return path
+    return None
 
+FONT_PATH = find_font()
 
-def run_command(cmd):
-    log(f"Running command: {' '.join(cmd)}")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"Command failed:\n{result.stderr}")
-    return result.stdout
-
-
-# ============================================================
-# TEXT PROCESSING & RENDERING
-# ============================================================
+def get_font(size: int):
+    if FONT_PATH:
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
 
 def reshape_arabic(text: str) -> str:
+    """إصلاح تشكيل وتوصيل اتجاه اللغة العربية بشكل مضمون 100%"""
     if not text:
         return ""
     try:
         reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
+        bidi_text = get_display(reshaped)
+        return bidi_text
     except Exception as e:
         log(f"Arabic reshape warning: {e}")
         return text
 
-
-def get_font(size: int):
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "arial.ttf"
-    ]
-    for fp in font_paths:
-        if os.path.exists(fp):
-            try:
-                return ImageFont.truetype(fp, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-
-def draw_card(title: str, text: str, output_path: Path, index: int = 0, is_thumbnail: bool = False):
-    img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), color=(20, 24, 33))
+def draw_card(title: str, text: str, output_path: Path, is_thumbnail: bool = False):
+    """رسم الصورة بخلفية ملونة وإطار واضح لمنع ظهور الشاشة السوداء"""
+    bg_color = (15, 23, 42) if is_thumbnail else (24, 32, 48)
+    img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), color=bg_color)
     draw = ImageDraw.Draw(img)
 
     title_reshaped = reshape_arabic(title)
     text_reshaped = reshape_arabic(text)
 
-    font_title = get_font(48 if not is_thumbnail else 56)
-    font_text = get_font(32)
+    font_title = get_font(48 if is_thumbnail else 40)
+    font_text = get_font(28)
 
-    # رسم العنوان
-    draw.text((VIDEO_WIDTH // 2, VIDEO_HEIGHT // 3), title_reshaped, fill=(255, 255, 255), font=font_title, anchor="mm")
+    # رسم بطاقة خلفية أنيقة لتوضيح النصوص
+    margin = 50
+    card_box = [margin, margin, VIDEO_WIDTH - margin, VIDEO_HEIGHT - margin]
+    draw.rounded_rectangle(card_box, radius=20, fill=(35, 45, 66), outline=(70, 90, 120), width=3)
+
+    # رسم العنوان في المنتصف
+    if title_reshaped:
+        draw.text(
+            (VIDEO_WIDTH // 2, VIDEO_HEIGHT // 3),
+            title_reshaped,
+            fill=(255, 255, 255),
+            font=font_title,
+            anchor="mm"
+        )
 
     # رسم النص الفرعي إن وجد
     if text_reshaped and not is_thumbnail:
-        draw.text((VIDEO_WIDTH // 2, VIDEO_HEIGHT // 2 + 50), text_reshaped, fill=(200, 210, 225), font=font_text, anchor="mm")
+        draw.text(
+            (VIDEO_WIDTH // 2, VIDEO_HEIGHT // 2 + 50),
+            text_reshaped,
+            fill=(210, 225, 245),
+            font=font_text,
+            anchor="mm"
+        )
 
-    img.save(output_path)
-
-
-# ============================================================
-# NARRATION & AUDIO
-# ============================================================
-
-async def _tts_to_file(text: str, voice: str, output_path: Path):
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(str(output_path))
-
-
-def generate_narration(text: str, voice: str, output_path: Path):
-    try:
-        asyncio.run(_tts_to_file(text, voice, output_path))
-    except Exception as e:
-        log(f"TTS Generation Error: {e}")
-        raise
-
+    img.save(output_path, format="PNG")
 
 def get_audio_duration(audio_path: Path) -> float:
-    ffmpeg = require_ffmpeg()
-    ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
+    """استخراج مدة الملف الصوتي باستخدام ffprobe"""
+    ffprobe = shutil.which("ffprobe") or "ffprobe"
     cmd = [
         ffprobe, "-v", "error",
         "-show_entries", "format=duration",
@@ -121,86 +108,44 @@ def get_audio_duration(audio_path: Path) -> float:
         str(audio_path.absolute())
     ]
     try:
-        out = run_command(cmd)
-        return float(out.strip())
-    except Exception:
-        return SCENE_MIN_DURATION
-
-
-def prepare_scenes(title: str, script: str, scenes: list) -> list:
-    if scenes and isinstance(scenes, list):
-        return scenes
-    
-    # تحضير مشاهد افتراضية من النص
-    lines = [line.strip() for line in script.split(".") if line.strip()]
-    if not lines:
-        lines = [title]
-        
-    prepared = []
-    for idx, line in enumerate(lines):
-        prepared.append({
-            "title": f"المشهد {idx + 1}" if len(lines) > 1 else title,
-            "text": line
-        })
-    return prepared
-
-
-# ============================================================
-# MAKE VIDEO (MATCHING WORKER.PY REQUIREMENT)
-# ============================================================
-
-def make_video(
-    title: str,
-    script: str = "",
-    scenes: list = None,
-    output_dir = "output",
-    voice: str = DEFAULT_VOICE,
-    **kwargs
-):
-    """
-    إنشاء الفيديو والصورة المصغرة وترجيع (video_path, thumbnail_path)
-    مع ضبط المسارات بدقة لمنع خطأ البحث في مجلد باسم الصوت.
-    """
-    ffmpeg = require_ffmpeg()
-    
-    # تحويل مسار المخرج إلى Path بشكل مطلق وصحيح
-    output_path = Path(output_dir).resolve()
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    prepared_scenes = prepare_scenes(title, script, scenes or [])
-    video_clips = []
-
-    log(f"Processing {len(prepared_scenes)} scenes in folder: {output_path}")
-
-    # 1. إنشاء الصورة المصغرة (Thumbnail)
-    thumb_path = output_path / "thumbnail.png"
-    try:
-        draw_card(title, "", thumb_path, index=0, is_thumbnail=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(res.stdout.strip())
     except Exception as e:
-        log(f"Thumbnail generation warning: {e}")
-        thumb_path = None
+        log(f"Error getting audio duration: {e}")
+        return 10.0
 
-    # 2. إنتاج المشاهد
-    for idx, scene in enumerate(prepared_scenes):
-        scene_title = scene.get("title", "")
-        scene_text = scene.get("text", "")
+async def text_to_speech_edge(text: str, output_path: Path, voice: str = "ar-EG-SalmaNeural"):
+    """توليد الصوت باستخدام edge-tts"""
+    import edge_tts
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(str(output_path.absolute()))
+
+async def make_video(job_id: str, title: str, script_items: list) -> tuple[Path, Path]:
+    """إنشاء أجزاء الفيديو وتجميعها بملف واحد وإعداد الصورة المصغرة"""
+    job_dir = MEDIA_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    clip_paths = []
+
+    for idx, item in enumerate(script_items):
+        sec_title = item.get("title", f"الجزء {idx+1}")
+        sec_text = item.get("text", "")
         
-        img_path = output_path / f"scene_{idx}.png"
-        draw_card(scene_title, scene_text, img_path, index=idx)
+        img_path = job_dir / f"img_{idx}.png"
+        audio_path = job_dir / f"audio_{idx}.mp3"
+        clip_path = job_dir / f"clip_{idx}.mp4"
 
-        audio_path = output_path / f"scene_{idx}.mp3"
-        narration_text = f"{scene_title}. {scene_text}".strip()
-        
-        try:
-            generate_narration(narration_text, voice, audio_path)
-            duration = get_audio_duration(audio_path)
-        except Exception as e:
-            log(f"Narration warning for scene {idx}: {e}")
-            duration = SCENE_MIN_DURATION
+        # 1. إنشاء الصورة
+        draw_card(sec_title, sec_text, img_path)
 
-        duration = max(SCENE_MIN_DURATION, min(duration, SCENE_MAX_DURATION))
+        # 2. إنشاء الصوت
+        tts_text = f"{sec_title}. {sec_text}"
+        await text_to_speech_edge(tts_text, audio_path)
 
-        clip_path = output_path / f"clip_{idx}.mp4"
+        duration = get_audio_duration(audio_path) + 0.5
+
+        # 3. دمج الصوت والصورة إلى مقطع فيديو متوافق كلياً مع yuv420p لمنع السواد
         cmd = [
             ffmpeg, "-y",
             "-loop", "1", "-i", str(img_path.absolute()),
@@ -209,7 +154,7 @@ def make_video(
             "-preset", "ultrafast",
             "-tune", "stillimage",
             "-r", str(VIDEO_FPS),
-            "-s", f"{VIDEO_WIDTH}x{VIDEO_HEIGHT}",
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
             "-c:a", "aac",
             "-b:a", "128k",
             "-pix_fmt", "yuv420p",
@@ -217,25 +162,42 @@ def make_video(
             "-t", str(duration),
             str(clip_path.absolute())
         ]
-        run_command(cmd)
-        video_clips.append(clip_path)
+        
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            log(f"FFmpeg Clip Error: {stderr.decode()}")
+            raise RuntimeError("فشل في إنشاء مقطع الفيديو")
 
-    # 3. دمج المشاهد
-    concat_list = output_path / "concat_list.txt"
-    with open(concat_list, "w", encoding="utf-8") as f:
-        for clip in video_clips:
-            f.write(f"file '{clip.absolute()}'\n")
+        clip_paths.append(clip_path)
 
-    final_video_path = output_path / "final_output.mp4"
+    # 4. تجميع كافة المقاطع
+    concat_file = job_dir / "concat.txt"
+    with open(concat_file, "w", encoding="utf-8") as f:
+        for c in clip_paths:
+            f.write(f"file '{c.absolute()}'\n")
+
+    final_video_path = job_dir / "final_video.mp4"
     concat_cmd = [
         ffmpeg, "-y",
-        "-f", "concat", "-safe", "0",
-        "-i", str(concat_list.absolute()),
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_file.absolute()),
         "-c", "copy",
         str(final_video_path.absolute())
     ]
-    run_command(concat_cmd)
+    
+    proc = await asyncio.create_subprocess_exec(*concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    _, stderr = await proc.communicate()
+    
+    if proc.returncode != 0:
+        log(f"FFmpeg Concat Error: {stderr.decode()}")
+        raise RuntimeError("فشل في تجميع مقاطع الفيديو")
 
-    log(f"Video generated successfully: {final_video_path}")
+    # 5. إنشاء الصورة المصغرة (Thumbnail)
+    thumb_path = job_dir / "thumbnail.png"
+    draw_card(title, "فيديو جديد", thumb_path, is_thumbnail=True)
 
-    return str(final_video_path.absolute()), str(thumb_path.absolute()) if thumb_path else ""
+    return final_video_path, thumb_path
+    
