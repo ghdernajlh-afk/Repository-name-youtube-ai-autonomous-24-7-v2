@@ -15,3 +15,5 @@ python-multipart
 pydantic
 itsdangerous
 psycopg[binary]
+arabic-reshaper
+python-bidi
