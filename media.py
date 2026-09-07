@@ -120,34 +120,22 @@ async def text_to_speech_edge(text: str, output_path: Path, voice: str = "ar-EG-
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(str(output_path.absolute()))
 
-async def make_video(*args, **kwargs) -> tuple[Path, Path]:
+async def make_video(job_id: str = "", title: str = "", script_items: list = None, *args, **kwargs) -> tuple[Path, Path]:
     """
     إنشاء أجزاء الفيديو وتجميعها بملف واحد وإعداد الصورة المصغرة.
-    تم استخراج الوسائط مرنًا لتفادي خطأ مرابط الأرجومنت (5 arguments).
+    تقبل جميع الوسائط الزائدة من worker (*args, **kwargs) لتجنب أخطاء المعاملات.
     """
-    # استخراج القيم بأمان بغض النظر عن طريقة إرسالها من worker.py
-    job_id = str(args[0]) if len(args) > 0 else kwargs.get("job_id", "job_tmp")
-    title = str(args[1]) if len(args) > 1 else kwargs.get("title", "عنوان الفيديو")
-    
-    # البحث عن عناصر النص/المقاطع
-    script_items = []
-    if len(args) > 2 and isinstance(args[2], list):
+    if not job_id and len(args) > 0:
+        job_id = str(args[0])
+    if not title and len(args) > 1:
+        title = str(args[1])
+    if script_items is None and len(args) > 2:
         script_items = args[2]
-    elif "script_items" in kwargs:
-        script_items = kwargs["script_items"]
-    elif "script" in kwargs:
-        script_items = kwargs["script"]
-    else:
-        # إذا كانت المكونات ممررة كقيم أخرى في args
-        for arg in args[2:]:
-            if isinstance(arg, list):
-                script_items = arg
-                break
 
     if not script_items:
-        script_items = [{"title": title, "text": title}]
+        script_items = [{"title": title or "عنوان", "text": title or "محتوى"}]
 
-    job_dir = MEDIA_DIR / job_id
+    job_dir = MEDIA_DIR / str(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
 
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
@@ -174,7 +162,7 @@ async def make_video(*args, **kwargs) -> tuple[Path, Path]:
 
         duration = get_audio_duration(audio_path) + 0.5
 
-        # 3. دمج الصوت والصورة إلى مقطع فيديو متوافق كلياً مع yuv420p
+        # 3. دمج الصوت والصورة إلى مقطع فيديو متوافق مع yuv420p لمنع الشاشة السوداء
         cmd = [
             ffmpeg, "-y",
             "-loop", "1", "-i", str(img_path.absolute()),
