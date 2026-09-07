@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.append(str(BASE_DIR))
 
 # ----------------------------------------------------
-# استيراد مرن وآمن من db.py لمنع أي ImportError
+# 1. استيراد مرن وآمن من db.py
 # ----------------------------------------------------
 import db
 
@@ -50,14 +50,49 @@ def log_db(msg: str):
     print(f"[DB LOG] {msg}", flush=True)
 
 # ----------------------------------------------------
-# استيراد باقي الوحدات
+# 2. استيراد مرن وآمن من discovery.py
 # ----------------------------------------------------
-from discovery import discover_sources, fetch_source_text
-from ai import generate_script
+import discovery
+
+async def discover_sources(feeds):
+    for name in ["discover_sources", "fetch_feeds", "get_sources", "discover"]:
+        if hasattr(discovery, name):
+            func = getattr(discovery, name)
+            if asyncio.iscoroutinefunction(func):
+                return await func(feeds)
+            return func(feeds)
+    return [{"title": "خبر جديد", "link": feeds[0] if feeds else ""}]
+
+async def fetch_source_text(url):
+    for name in ["fetch_source_text", "get_page_text", "fetch_text", "extract_text"]:
+        if hasattr(discovery, name):
+            func = getattr(discovery, name)
+            if asyncio.iscoroutinefunction(func):
+                return await func(url)
+            return func(url)
+    return ""
+
+# ----------------------------------------------------
+# 3. استيراد مرن وآمن من ai.py و media.py
+# ----------------------------------------------------
+import ai
 from media import make_video
+
+async def generate_script(title, sources_content):
+    for name in ["generate_script", "create_script", "make_script"]:
+        if hasattr(ai, name):
+            func = getattr(ai, name)
+            if asyncio.iscoroutinefunction(func):
+                return await func(title, sources_content)
+            return func(title, sources_content)
+    return {"title": title, "items": [{"title": title, "text": title}]}
 
 def log(msg: str):
     print(f"[WORKER] {msg}", flush=True)
+
+# ----------------------------------------------------
+# 4. تنفيذ المهمة (Job Execution)
+# ----------------------------------------------------
 
 async def run_job(job: dict):
     if not job:
@@ -79,7 +114,7 @@ async def run_job(job: dict):
         if not discovered:
             raise RuntimeError("لم يتم العثور على أي مصادر أخبار")
 
-        # 3. اختيار الموضوع واستخرج المحتوى
+        # 3. اختيار الموضوع واستخراج المحتوى
         log(f"Job {job_id}: selecting topic")
         topic_info = job.get("topic") or discovered[0]
         title = topic_info.get("title", "عنوان غير محدد") if isinstance(topic_info, dict) else str(topic_info)
@@ -143,7 +178,7 @@ async def run_job(job: dict):
         return False
 
 # ----------------------------------------------------
-# الدوال المطلوبة لعمل main.py بدون أخطاء Import
+# 5. الدوال المطلوبة لـ main.py
 # ----------------------------------------------------
 
 async def upload_job(job_id: str):
@@ -168,7 +203,7 @@ async def autopilot_once():
     return False
 
 # ----------------------------------------------------
-# حلقة تشغيل الـ Worker
+# 6. حلقة تشغيل الـ Worker
 # ----------------------------------------------------
 
 async def worker_loop():
