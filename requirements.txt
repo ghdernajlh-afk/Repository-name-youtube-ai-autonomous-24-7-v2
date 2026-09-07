@@ -1,4 +1,4 @@
-fastapi
+Fastapi
 uvicorn[standard]
 python-dotenv
 requests
@@ -17,3 +17,4 @@ itsdangerous
 psycopg[binary]
 arabic-reshaper
 python-bidi
+async-timeout
