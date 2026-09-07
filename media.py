@@ -120,8 +120,33 @@ async def text_to_speech_edge(text: str, output_path: Path, voice: str = "ar-EG-
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(str(output_path.absolute()))
 
-async def make_video(job_id: str, title: str, script_items: list) -> tuple[Path, Path]:
-    """إنشاء أجزاء الفيديو وتجميعها بملف واحد وإعداد الصورة المصغرة"""
+async def make_video(*args, **kwargs) -> tuple[Path, Path]:
+    """
+    إنشاء أجزاء الفيديو وتجميعها بملف واحد وإعداد الصورة المصغرة.
+    تم استخراج الوسائط مرنًا لتفادي خطأ مرابط الأرجومنت (5 arguments).
+    """
+    # استخراج القيم بأمان بغض النظر عن طريقة إرسالها من worker.py
+    job_id = str(args[0]) if len(args) > 0 else kwargs.get("job_id", "job_tmp")
+    title = str(args[1]) if len(args) > 1 else kwargs.get("title", "عنوان الفيديو")
+    
+    # البحث عن عناصر النص/المقاطع
+    script_items = []
+    if len(args) > 2 and isinstance(args[2], list):
+        script_items = args[2]
+    elif "script_items" in kwargs:
+        script_items = kwargs["script_items"]
+    elif "script" in kwargs:
+        script_items = kwargs["script"]
+    else:
+        # إذا كانت المكونات ممررة كقيم أخرى في args
+        for arg in args[2:]:
+            if isinstance(arg, list):
+                script_items = arg
+                break
+
+    if not script_items:
+        script_items = [{"title": title, "text": title}]
+
     job_dir = MEDIA_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -129,9 +154,13 @@ async def make_video(job_id: str, title: str, script_items: list) -> tuple[Path,
     clip_paths = []
 
     for idx, item in enumerate(script_items):
-        sec_title = item.get("title", f"الجزء {idx+1}")
-        sec_text = item.get("text", "")
-        
+        if isinstance(item, dict):
+            sec_title = item.get("title", f"الجزء {idx+1}")
+            sec_text = item.get("text", "")
+        else:
+            sec_title = f"الجزء {idx+1}"
+            sec_text = str(item)
+
         img_path = job_dir / f"img_{idx}.png"
         audio_path = job_dir / f"audio_{idx}.mp3"
         clip_path = job_dir / f"clip_{idx}.mp4"
@@ -145,7 +174,7 @@ async def make_video(job_id: str, title: str, script_items: list) -> tuple[Path,
 
         duration = get_audio_duration(audio_path) + 0.5
 
-        # 3. دمج الصوت والصورة إلى مقطع فيديو متوافق كلياً مع yuv420p لمنع السواد
+        # 3. دمج الصوت والصورة إلى مقطع فيديو متوافق كلياً مع yuv420p
         cmd = [
             ffmpeg, "-y",
             "-loop", "1", "-i", str(img_path.absolute()),
