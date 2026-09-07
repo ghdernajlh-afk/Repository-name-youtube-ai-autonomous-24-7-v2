@@ -78,12 +78,38 @@ def placeholder():
 
 
 # ============================================================
+# RESET HUNG JOBS (AUTOMATIC CLEANUP)
+# ============================================================
+
+def clean_hung_jobs():
+    """
+    Resets stuck jobs (generating, researching, writing) to 'error' status.
+    """
+    try:
+        with conn() as c:
+            c.execute(
+                """
+                UPDATE jobs
+                SET status = 'error', error = 'Reset hung job on startup'
+                WHERE status IN ('generating', 'researching', 'writing')
+                """
+            )
+            c.commit()
+            print("[DB] Cleared all hung jobs successfully.", flush=True)
+            return True
+    except Exception as exc:
+        print(f"[DB] Error clearing hung jobs: {exc}", flush=True)
+        return False
+
+
+# ============================================================
 # INIT DATABASE
 # ============================================================
 
 def init():
     """
     Create all required tables if they do not exist.
+    Also resets any hung jobs from previous crashed runs.
     """
 
     if USE_POSTGRES:
@@ -122,6 +148,8 @@ def init():
 
             c.commit()
 
+        # تنظيف المهام المعلقة بعد إنشاء الجداول
+        clean_hung_jobs()
         return
 
     # --------------------------------------------------------
@@ -161,6 +189,9 @@ def init():
         )
 
         c.commit()
+
+    # تنظيف المهام المعلقة لـ SQLite
+    clean_hung_jobs()
 
 
 # ============================================================
@@ -515,3 +546,11 @@ def jobs_today():
             ).fetchone()
 
         return row["n"]
+
+
+# ============================================================
+# AUTO-CLEANUP ON MODULE LOAD
+# ============================================================
+
+# تنظيف تلقائي عند إقلاع السيرفر
+clean_hung_jobs()
